@@ -20,7 +20,12 @@
  *     L = CrossEntropy(y, t_{p+1})
  *   激活用 tanh 近似的 GELU；优化器用 AdamW；精度全程 f32。
  */
-import type { ModelSpec, NamedWeights } from './protocol';
+import type { MlpModelSpec, ModelSpec, NamedWeights } from './protocol';
+import { mulberry32 } from './rng';
+import { gpuIfReady, gpuLastError } from './capability';
+import { GpuTinyGptEngine } from './gpu-engine';
+
+export { mulberry32 };
 
 export interface TrainBatchResult
 {
@@ -34,8 +39,8 @@ export interface TrainEngine
   stepCount: number;
   paramNames(): string[];
   paramCount(): number;
-  /** 深拷贝出当前权重（可直接上网传输）。 */
-  getWeights(): NamedWeights;
+  /** 深拷贝出当前权重（可直接上网传输）。GPU 引擎是异步回读，故为 async。 */
+  getWeights(): Promise<NamedWeights>;
   setWeights( w: NamedWeights ): void;
   /** 从 ids 中随机抽 batchSize 个窗口做一步 AdamW；返回平均 loss 与消耗 token 数。 */
   trainBatch( ids: Uint32Array, batchSize: number, lr: number ): Promise<TrainBatchResult>;
@@ -43,22 +48,6 @@ export interface TrainEngine
   evalAt( ids: Uint32Array, start: number, count: number ): Promise<number>;
   /** 从给定前缀贪心续写 n 个字符 id。 */
   sample( prefix: number[], n: number ): Promise<number[]>;
-}
-
-// ------------------------------------------------------------------ 随机数
-
-/** mulberry32：小而稳的可复现 PRNG。 */
-export function mulberry32 ( seed: number ): () => number
-{
-  let a = seed >>> 0;
-  return () =>
-  {
-    a = ( a + 0x6d2b79f5 ) >>> 0;
-    let t = a;
-    t = Math.imul( t ^ ( t >>> 15 ), t | 1 );
-    t ^= t + Math.imul( t ^ ( t >>> 7 ), t | 61 );
-    return ( ( t ^ ( t >>> 14 ) ) >>> 0 ) / 4294967296;
-  };
 }
 
 // ------------------------------------------------------------------ GELU
@@ -83,7 +72,7 @@ function geluGrad ( x: number ): number
 
 export class TinyMlpEngine implements TrainEngine
 {
-  readonly spec: ModelSpec;
+  readonly spec: MlpModelSpec;
   stepCount = 0;
 
   private readonly V: number;
@@ -104,7 +93,7 @@ export class TinyMlpEngine implements TrainEngine
 
   private readonly rng: () => number;
 
-  constructor ( spec: ModelSpec )
+  constructor ( spec: MlpModelSpec )
   {
     this.spec = spec;
     this.V = spec.vocabSize;
@@ -156,7 +145,7 @@ export class TinyMlpEngine implements TrainEngine
     return this.emb.length + this.w1.length + this.b1.length + this.w2.length + this.b2.length;
   }
 
-  getWeights (): NamedWeights
+  async getWeights (): Promise<NamedWeights>
   {
     return {
       emb: this.emb.slice(),
@@ -409,8 +398,18 @@ export function createEngine ( spec: ModelSpec ): TrainEngine
     case 'mlp':
       return new TinyMlpEngine( spec );
     case 'gpu-tinygpt':
-      throw new Error( 'gpu-tinygpt 引擎尚未接入：需在 WebGPU 可用时把 Trainer 适配到 TrainEngine 接口' );
+    {
+      const gpu = gpuIfReady();
+      if ( !gpu )
+      {
+        throw new Error(
+          'WebGPU 尚未就绪，无法构造 gpu-tinygpt 引擎：' +
+          ( gpuLastError() ?? '还未探测设备能力（页面启动时应先跑一次能力探测）' ),
+        );
+      }
+      return new GpuTinyGptEngine( gpu, spec );
+    }
     default:
-      throw new Error( `未知引擎：${ String( spec.engine ) }` );
+      throw new Error( `未知引擎：${ String( ( spec as { engine?: unknown } ).engine ) }` );
   }
 }

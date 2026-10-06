@@ -1,33 +1,16 @@
 /**
- * 用 esbuild 把 src/fed/selfcheck.ts 打成 Node 可执行模块并运行。
- * 这样自检脚本与浏览器里跑的是同一份源码，不存在「测的是另一套实现」。
- *
+ * 联邦训练核心的自检运行器。
  * 用法： npm run verify:fed
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import esbuild from 'esbuild';
+import { fileURLToPath } from 'node:url';
+import { bundleAndImport } from './lib/bundle.mjs';
 
 const root = path.resolve( path.dirname( fileURLToPath( import.meta.url ) ), '..' );
-const cacheDir = path.join( root, 'node_modules', '.cache', 'wb-verify' );
-fs.mkdirSync( cacheDir, { recursive: true } );
-const outfile = path.join( cacheDir, 'selfcheck.mjs' );
+const { runFedSelfCheck } = await bundleAndImport( root, 'src/fed/selfcheck.ts', 'selfcheck' );
 
-await esbuild.build( {
-  entryPoints: [ path.join( root, 'src', 'fed', 'selfcheck.ts' ) ],
-  bundle: true,
-  format: 'esm',
-  platform: 'node',
-  target: 'es2022',
-  outfile,
-  logLevel: 'warning',
-} );
-
-const { runFedSelfCheck } = await import( pathToFileURL( outfile ).href );
-
-const textPath = path.join( root, 'public', 'data', 'tinyshakespeare.txt' );
-const text = fs.readFileSync( textPath, 'utf8' );
+const text = fs.readFileSync( path.join( root, 'public', 'data', 'tinyshakespeare.txt' ), 'utf8' );
 
 console.log( `公共训练网络 · 联邦训练核心自检（语料 ${ text.length.toLocaleString() } 字符）\n` );
 

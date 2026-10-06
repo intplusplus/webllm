@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
+import { rawPlugin } from './lib/bundle.mjs';
 
 const root = path.resolve( path.dirname( fileURLToPath( import.meta.url ) ), '..' );
 const tmp = path.join( root, 'node_modules', '.cache', 'wb-standalone' );
@@ -35,6 +36,8 @@ await esbuild.build( {
   legalComments: 'none',
   logLevel: 'warning',
   define: { 'process.env.NODE_ENV': '"production"' },
+  // 工程里的 WGSL 着色器用 Vite 的 `?raw` 导入，esbuild 不认，需要这个插件
+  plugins: [ rawPlugin ],
 } );
 
 const js = fs.readFileSync( path.join( tmp, 'app.js' ), 'utf8' );

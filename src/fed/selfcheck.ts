@@ -13,12 +13,15 @@
 import { buildStoi, corpusDigest, encodeTo, pickProbe, shardText, vocabOf } from './corpus';
 import { TinyMlpEngine } from './engine';
 import {
+  aggregateGlobal,
   decodeWeights,
   encodeWeights,
   fedAvg,
   l2Distance,
   weightsDigest,
-  type ModelSpec,
+  type AggregateSpec,
+  type AggregateState,
+  type MlpModelSpec,
   type NamedWeights,
 } from './protocol';
 
@@ -29,7 +32,7 @@ export interface CheckResult
   detail: string;
 }
 
-const SPEC: ModelSpec = {
+const SPEC: MlpModelSpec = {
   engine: 'mlp',
   vocabSize: 0, // 运行时按真实字符表填
   ctx: 8,
@@ -38,7 +41,7 @@ const SPEC: ModelSpec = {
   seed: 20261006,
 };
 
-function specFor ( vocabSize: number, seed = SPEC.seed ): ModelSpec
+function specFor ( vocabSize: number, seed = SPEC.seed ): MlpModelSpec
 {
   return { ...SPEC, vocabSize, seed };
 }
@@ -73,7 +76,7 @@ export async function runFedSelfCheck ( text: string ): Promise<CheckResult[]>
   // ---------------------------------------------------------------- 2. 权重帧往返
   {
     const a = new TinyMlpEngine( spec );
-    const w = a.getWeights();
+    const w = await a.getWeights();
     const buf = encodeWeights( w, { round: 1, peerId: 'x', samples: 1, tokens: 1, localLoss: 0, probeLoss: 0, deltaNorm: 0, digest: '' } );
     const dec = decodeWeights( buf );
     let identical = true;
@@ -98,8 +101,8 @@ export async function runFedSelfCheck ( text: string ): Promise<CheckResult[]>
     check( '篡改权重帧可被检出', caught, caught ? '末字节翻转后 decode 抛错（摘要不匹配）' : '未能检出篡改！' );
 
     // 摘要对同权重稳定
-    const d2 = digestOfWeights( a.getWeights() );
-    check( '权重摘要稳定', d2 === digestOfWeights( a.getWeights() ), `digest=${ d2 }` );
+    const d2 = digestOfWeights( await a.getWeights() );
+    check( '权重摘要稳定', d2 === digestOfWeights( await a.getWeights() ), `digest=${ d2 }` );
   }
 
   // ---------------------------------------------------------------- 3. FedAvg
@@ -120,9 +123,9 @@ export async function runFedSelfCheck ( text: string ): Promise<CheckResult[]>
     const a = new TinyMlpEngine( spec );
     const b = new TinyMlpEngine( spec );
     const c = new TinyMlpEngine( specFor( vocab.length, SPEC.seed + 1 ) );
-    const wa = a.getWeights();
-    const wb = b.getWeights();
-    const wc = c.getWeights();
+    const wa = await a.getWeights();
+    const wb = await b.getWeights();
+    const wc = await c.getWeights();
     const same = ( x: NamedWeights, y: NamedWeights ): boolean =>
       Object.keys( x ).every( ( k ) =>
       {
@@ -144,7 +147,7 @@ export async function runFedSelfCheck ( text: string ): Promise<CheckResult[]>
     const probeIds = encodeTo( text.slice( probe.offset, probe.offset + probe.size ), stoi );
     const a = new TinyMlpEngine( spec );
     const b = new TinyMlpEngine( spec );
-    b.setWeights( a.getWeights() );
+    b.setWeights( await a.getWeights() );
     const la = await a.evalAt( probeIds, spec.ctx, 256 );
     const lb = await b.evalAt( probeIds, spec.ctx, 256 );
     check( '共识探针评估可复现', Math.abs( la - lb ) === 0,
@@ -153,36 +156,47 @@ export async function runFedSelfCheck ( text: string ): Promise<CheckResult[]>
       `初始 loss=${ la.toFixed( 3 ) }，ln(${ vocab.length })=${ Math.log( vocab.length ).toFixed( 3 ) }` );
   }
 
-  // ---------------------------------------------------------------- 6. 联邦 vs 单节点独训
+  // ---------------------------------------------------------------- 6. 联邦 vs 单节点独训 / 两种聚合方式
   {
     const shards = 2;
     const rounds = 6;
     const stepsPerRound = 10;
     const lr = 0.05;
+    const T = spec.ctx;
     const probe = pickProbe( { name: 't', text, vocab }, 1024 );
     const probeIds = encodeTo( text.slice( probe.offset, probe.offset + probe.size ), stoi );
-
     const pool = [ 0, 1 ].map( ( i ) => encodeTo( shardText( text, i, shards ), stoi ) );
+
     const init = new TinyMlpEngine( spec );
-    const baseline = await init.evalAt( probeIds, spec.ctx, 256 );
+    const baseline = await init.evalAt( probeIds, T, 256 );
 
-    // 联邦：每轮各节点本地训 stepsPerRound，然后按样本数 FedAvg
-    const fedA = new TinyMlpEngine( spec );
-    const fedB = new TinyMlpEngine( spec );
-    for ( let r = 0; r < rounds; r++ )
+    /** 跑一轮完整的联合训练，聚合方式可插拔。返回最终探针 loss 与权重。 */
+    const runFederated = async ( agg: AggregateSpec ): Promise<{ loss: number; weights: NamedWeights }> =>
     {
-      for ( let s = 0; s < stepsPerRound; s++ )
+      const A = new TinyMlpEngine( spec );
+      const B = new TinyMlpEngine( spec );
+      const state: AggregateState = { momentum: null };
+      let base = await A.getWeights();
+      const sizes = [ stepsPerRound * 32, stepsPerRound * 32 ];
+      for ( let r = 0; r < rounds; r++ )
       {
-        await fedA.trainBatch( pool[ 0 ], 32, lr );
-        await fedB.trainBatch( pool[ 1 ], 32, lr );
+        for ( let s = 0; s < stepsPerRound; s++ )
+        {
+          await A.trainBatch( pool[ 0 ], 32, lr );
+          await B.trainBatch( pool[ 1 ], 32, lr );
+        }
+        const global = aggregateGlobal( base, [ await A.getWeights(), await B.getWeights() ], sizes, agg, state );
+        A.setWeights( global );
+        B.setWeights( global );
+        base = global;
       }
-      const global = fedAvg( [ fedA.getWeights(), fedB.getWeights() ], [ stepsPerRound * 32, stepsPerRound * 32 ] );
-      fedA.setWeights( global );
-      fedB.setWeights( global );
-    }
-    const fedLoss = await fedA.evalAt( probeIds, spec.ctx, 256 );
+      return { loss: await A.evalAt( probeIds, T, 256 ), weights: await A.getWeights() };
+    };
 
-    // 单节点独训：同样总步数，只用 shard 0（对照）
+    const fed = await runFederated( { mode: 'fedavg', outerLr: 1, momentum: 0 } );
+    const diloco = await runFederated( { mode: 'diloco', outerLr: 0.7, momentum: 0.9 } );
+
+    // 单节点独训：同样总步数，只用自己那一片（对照）
     const soloA = new TinyMlpEngine( spec );
     const soloB = new TinyMlpEngine( spec );
     for ( let s = 0; s < rounds * stepsPerRound; s++ )
@@ -190,18 +204,49 @@ export async function runFedSelfCheck ( text: string ): Promise<CheckResult[]>
       await soloA.trainBatch( pool[ 0 ], 32, lr );
       await soloB.trainBatch( pool[ 1 ], 32, lr );
     }
-    const soloLossA = await soloA.evalAt( probeIds, spec.ctx, 256 );
-    const soloLossB = await soloB.evalAt( probeIds, spec.ctx, 256 );
+    const soloLossA = await soloA.evalAt( probeIds, T, 256 );
+    const soloLossB = await soloB.evalAt( probeIds, T, 256 );
     const soloAvg = ( soloLossA + soloLossB ) / 2;
 
-    check( '联邦训练确实降低了探针 loss', fedLoss < baseline - 0.5,
-      `初始 ${ baseline.toFixed( 3 ) } → 联邦 ${ fedLoss.toFixed( 3 ) }（降 ${ ( baseline - fedLoss ).toFixed( 3 ) }）` );
-    check( '联邦优于单节点独训', fedLoss < soloAvg,
-      `联邦 ${ fedLoss.toFixed( 3 ) } vs 独训均值 ${ soloAvg.toFixed( 3 ) }（A ${ soloLossA.toFixed( 3 ) } / B ${ soloLossB.toFixed( 3 ) }）` );
+    check( '联邦训练确实降低了探针 loss', fed.loss < baseline - 0.5,
+      `初始 ${ baseline.toFixed( 3 ) } → 联邦(FedAvg) ${ fed.loss.toFixed( 3 ) }（降 ${ ( baseline - fed.loss ).toFixed( 3 ) }）` );
+    check( '联邦优于单节点独训', fed.loss < soloAvg,
+      `联邦 ${ fed.loss.toFixed( 3 ) } vs 独训均值 ${ soloAvg.toFixed( 3 ) }（A ${ soloLossA.toFixed( 3 ) } / B ${ soloLossB.toFixed( 3 ) }）` );
+    check( 'DiLoCo 式增量聚合同样有效', diloco.loss < baseline - 0.5,
+      `FedAvg ${ fed.loss.toFixed( 3 ) } · DiLoCo(η=0.7,β=0.9) ${ diloco.loss.toFixed( 3 ) } · 基线 ${ baseline.toFixed( 3 ) }` );
 
-    // 聚合前后权重确实不同（确认 FedAvg 生效而非空转）
-    const d = l2Distance( fedA.getWeights(), soloA.getWeights() );
+    // 聚合确实在起作用（而非空转）
+    const d = l2Distance( fed.weights, await soloA.getWeights() );
     check( '联邦模型与独训模型确有差异', d > 1e-3, `||w_fed - w_soloA||₂=${ d.toFixed( 4 ) }` );
+  }
+
+  // ---------------------------------------------------------------- 7. 聚合数学（纯函数）
+  {
+    const vecEq = ( x: Float32Array, y: Float32Array, tol = 1e-6 ): boolean =>
+      x.length === y.length && [ ...x ].every( ( v, i ) => Math.abs( v - y[ i ] ) < tol );
+
+    const base: NamedWeights = { p: Float32Array.from( [ 0, 0 ] ) };
+    const wa: NamedWeights = { p: Float32Array.from( [ 1, 3 ] ) };
+    const wb: NamedWeights = { p: Float32Array.from( [ 5, 1 ] ) };
+    const direct = fedAvg( [ wa, wb ], [ 1, 1 ] );
+
+    const s1: AggregateState = { momentum: null };
+    const viaFed = aggregateGlobal( base, [ wa, wb ], [ 1, 1 ], { mode: 'fedavg', outerLr: 1, momentum: 0 }, s1 );
+    const s2: AggregateState = { momentum: null };
+    const viaDiloco = aggregateGlobal( base, [ wa, wb ], [ 1, 1 ], { mode: 'diloco', outerLr: 1, momentum: 0 }, s2 );
+    check( '聚合骨架与直接 FedAvg 等价',
+      vecEq( viaFed.p, direct.p ) && vecEq( viaDiloco.p, direct.p ),
+      `直接 [${ [ ...direct.p ] }] · fedavg [${ [ ...viaFed.p ] }] · diloco(β=0,η=1) [${ [ ...viaDiloco.p ] }]` );
+
+    // 外层动量应跨轮累积：M ← β·M + Δ̄
+    const s3: AggregateState = { momentum: null };
+    const agg: AggregateSpec = { mode: 'diloco', outerLr: 1, momentum: 0.9 };
+    aggregateGlobal( base, [ wa, wb ], [ 1, 1 ], agg, s3 );
+    const m1 = Float32Array.from( s3.momentum!.p );
+    aggregateGlobal( base, [ wa, wb ], [ 1, 1 ], agg, s3 );
+    const m2 = s3.momentum!.p;
+    check( 'DiLoCo 外层动量跨轮累积', vecEq( m2, Float32Array.from( [ ...m1 ].map( ( v ) => 0.9 * v + v ) ) ),
+      `第 1 轮 M=[${ [ ...m1 ] }] → 第 2 轮 M=[${ [ ...m2 ] }]（期望 1.9 倍）` );
   }
 
   // ---------------------------------------------------------------- 7. 分片覆盖

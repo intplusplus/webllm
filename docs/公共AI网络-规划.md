@@ -239,8 +239,9 @@ LoRA 增量只有原模型的百分之几，交换量从 MB 级降到几十 KB�
 > **不是你的需求，属于我自己加戏**。
 >
 > 当前处置：
-> - 代码**保留**（已经跑通，且对「手机中途加入、页面刷新」这类场景还顺带起了
->   一致性校验的作用），但**它不是产品目标，优先级降到最低**。
+> - 代码**保留**，并且已改成**默认关闭**（`manifest.crossCheck = false`）：
+>   自用设备没有作弊问题，关掉能省掉每个节点每轮的一次额外评估 —— 手机尤其有感。
+>   想要一致性校验时可随时在界面上勾上。
 > - 后续如果网络只在「自己的设备 / 同一个团队」内使用，
 >   **4.3 的 v1–v4 整条路线都不用做**。
 > - 只有将来真的对陌生人开放时，这一节才重新变得重要。
@@ -414,8 +415,8 @@ LoRA 增量只有原模型的百分之几，交换量从 MB 级降到几十 KB�
 | 里程碑 | 内容 | 判定标准 | 状态 |
 |---|---|---|---|
 | **M-N0** | 协议 + 最小房间 + 信任 v0 | PC 与手机同 WiFi 完整训完一个小模型，账本可下载 | ✅ **本次已落地** |
-| M-N1 | 引擎分级：WebGPU tiny-GPT 接入 + 采样/推理复用 | 同一个房间能选 GPU 引擎，探针 loss 曲线一致 | 待做 |
-| M-N2 | 拓扑与鲁棒性：**切到 DiLoCo 式低通信联邦**、分层聚合、断线续训、掉队不阻塞 | 3 节点中拔掉 1 个，训练不中断且账本正确标记 | 待做 |
+| M-N1 | 引擎分级：WebGPU tiny-GPT 接入 + 能力探测 + 优雅回退 | 房间能选 WebGPU 引擎；无 WebGPU 的设备有明确提示并能退回 CPU | ✅ **已完成** |
+| M-N2 | 拓扑与鲁棒性：DiLoCo 式低通信联邦、分层聚合、断线续训、掉队不阻塞 | 3 节点中拔掉 1 个，训练不中断且账本正确标记 | 部分：弹性成员（每轮重发分配/迟到者下一轮加入/掉线不阻塞）已做；DiLoCo 已实现但**实测小规模下 FedAvg 更优**，故默认仍用 FedAvg |
 | M-N3 | 信任 v1：SHA-256 + 身份签名 + 清单签名 | 篡改任一权重帧都能被拒绝并溯源 | 待做 |
 | M-N4 | LoRA 引擎：浏览器参与 0.5B~3B 微调；引入 SparseLoCo 式 top-k + 量化压缩 | 交换量降到 100KB 以内，微调效果可评测 | 待做 |
 | M-N5 | 任务市场：发布/发现/加入/数据贡献/榜单 | 陌生人能独立完成一次完整协作 | 待做 |
@@ -514,8 +515,10 @@ P4  信任层与激励（M-N3/M-N7）—— 仅在将来对外开放时才需要
 
 | 文件 | 作用 |
 |---|---|
-| `src/fed/protocol.ts` | 房间清单 / 控制帧类型 / 权重帧编解码 / FedAvg / 摘要 |
+| `src/fed/protocol.ts` | 房间清单 / 模型规格（MLP 与 WebGPU 的可区分联合）/ 权重帧编解码 / **聚合数学（FedAvg + DiLoCo 共用骨架）** |
 | `src/fed/engine.ts` | `TrainEngine` 抽象 + 纯 JS 小模型引擎（含反向与 AdamW） |
+| `src/fed/gpu-engine.ts` | **WebGPU tiny-GPT 引擎**：把工程内已有 `Trainer` 适配到 `TrainEngine` |
+| `src/fed/capability.ts` | 设备能力探测（安全上下文 / navigator.gpu / 适配器）+ WebGPU 上下文缓存 + 可执行建议 |
 | `src/fed/corpus.ts` | 语料加载 / 字符表 / 分片 / 贡献数据过滤 |
 | `src/fed/transport.ts` | `Transport` 接口 + WebRTC 网状连接 + 信令客户端 |
 | `src/fed/bus.ts` | `LocalBus`：BroadcastChannel 本机多标签页通道，**零服务器** |
@@ -525,8 +528,10 @@ P4  信任层与激励（M-N3/M-N7）—— 仅在将来对外开放时才需要
 | `src/ui/fed-app.ts` + `src/ui/fed.css` | Demo 界面 |
 | `fed.html` + `src/fed-main.ts` | Demo 入口 |
 | `scripts/signal-server.mjs` | 零依赖信令服务器 |
-| `scripts/start-demo.mjs` | 一键启动（信令 + dev server + 打印局域网地址） |
-| `scripts/verify-fed.mjs` / `verify-e2e.mjs` / `verify-signal.mjs` | 三套自检 |
+| `scripts/start-demo.mjs` | 一键启动（信令 + dev server + 打印局域网地址与防火墙提示）；`--https` 用自签证书起 HTTPS（WebGPU 需要安全上下文） |
+| `scripts/lib/cert.mjs` | 用 Git 自带 openssl 生成本地 CA + 叶证书（含局域网 IP 的 SAN） |
+| `scripts/lib/cdp.mjs` | 零依赖 CDP 客户端：直接驱动本机 Chromium 做界面测试 |
+| `scripts/verify-fed.mjs` / `verify-e2e.mjs` / `verify-signal.mjs` / `verify-ui.mjs` | 四套自检 |
 
 跑起来：
 

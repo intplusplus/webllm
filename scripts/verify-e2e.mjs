@@ -1,29 +1,14 @@
 /**
- * 端到端联邦训练测试的运行器（用 esbuild 打包 src/fed/e2e.ts 后在 Node 里跑）。
- *
+ * 端到端联邦训练测试的运行器。
  * 用法： npm run verify:e2e
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import esbuild from 'esbuild';
+import { fileURLToPath } from 'node:url';
+import { bundleAndImport } from './lib/bundle.mjs';
 
 const root = path.resolve( path.dirname( fileURLToPath( import.meta.url ) ), '..' );
-const cacheDir = path.join( root, 'node_modules', '.cache', 'wb-verify' );
-fs.mkdirSync( cacheDir, { recursive: true } );
-const outfile = path.join( cacheDir, 'e2e.mjs' );
-
-await esbuild.build( {
-  entryPoints: [ path.join( root, 'src', 'fed', 'e2e.ts' ) ],
-  bundle: true,
-  format: 'esm',
-  platform: 'node',
-  target: 'es2022',
-  outfile,
-  logLevel: 'warning',
-} );
-
-const { runFedE2E } = await import( pathToFileURL( outfile ).href );
+const { runFedE2E } = await bundleAndImport( root, 'src/fed/e2e.ts', 'e2e' );
 const text = fs.readFileSync( path.join( root, 'public', 'data', 'tinyshakespeare.txt' ), 'utf8' );
 
 console.log( `公共训练网络 · 联邦训练端到端测试（3 节点房间，其中 1 个谎报 probeLoss）\n` );

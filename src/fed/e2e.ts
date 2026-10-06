@@ -11,14 +11,15 @@
  */
 import { LocalBus } from './bus';
 import { corpusDigest, pickProbe, type Corpus } from './corpus';
-import { detectKind, FedNode, type ModelCard } from './node';
+import { detectKind } from './capability';
+import { FedNode, type ModelCard } from './node';
 import {
   decodeWeights,
   encodeWeights,
   fingerprintOf,
   weightsDigest,
   type ControlMessage,
-  type ModelSpec,
+  type MlpModelSpec,
   type RoomManifest,
 } from './protocol';
 import type { PeerInfo } from './transport';
@@ -64,7 +65,7 @@ class TamperingBus extends LocalBus
   }
 }
 
-function makeManifest ( corpus: Corpus, spec: ModelSpec ): RoomManifest
+function makeManifest ( corpus: Corpus, spec: MlpModelSpec ): RoomManifest
 {
   const base = {
     roomId: 'e2e-room',
@@ -78,6 +79,9 @@ function makeManifest ( corpus: Corpus, spec: ModelSpec ): RoomManifest
     shards: SHARDS,
     corpus: { name: corpus.name, digest: corpusDigest( corpus ), chars: corpus.text.length, vocab: corpus.vocab },
     probe: pickProbe( corpus, 1024 ),
+    // 这个测试专门测「能不能抓住谎报」，所以交叉校验必须开
+    crossCheck: true,
+    aggregate: { mode: 'fedavg' as const, outerLr: 1, momentum: 0 },
     createdAt: Date.now(),
   };
   return { ...base, fingerprint: fingerprintOf( base ) };
@@ -131,7 +135,7 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
   const check = ( name: string, pass: boolean, detail: string ): void => { results.push( { name, pass, detail } ); };
 
   const corpus: Corpus = { name: 'E2E 语料（Tiny Shakespeare）', text, vocab: [ ...new Set( text ) ].sort() };
-  const spec: ModelSpec = { engine: 'mlp', vocabSize: corpus.vocab.length, ctx: 8, embDim: 16, hidden: 64, seed: 777 };
+  const spec: MlpModelSpec = { engine: 'mlp', vocabSize: corpus.vocab.length, ctx: 8, embDim: 16, hidden: 64, seed: 777 };
   const manifest = makeManifest( corpus, spec );
 
   const device = { kind: detectKind(), webgpu: false, cores: 4, memoryGB: 0, ua: 'headless' };
@@ -157,7 +161,7 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
   check( '节点互相发现', boxA.bus.peerInfos.length === 2 && boxB.bus.peerInfos.length === 2,
     `主机看到 ${ boxA.bus.peerInfos.length } 个节点，B 看到 ${ boxB.bus.peerInfos.length } 个（期望各 2）` );
 
-  const initialDigest = weightsDigest( boxA.node.engineRef.getWeights() );
+  const initialDigest = weightsDigest( await boxA.node.engineRef.getWeights() );
 
   let ok = false;
   try
@@ -174,7 +178,7 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
     check( '端到端流程完成', false, ( err as Error ).message );
   }
 
-  const card = boxA.node.buildCard( manifest );
+  const card = await boxA.node.buildCard( manifest );
   if ( ok ) check( '端到端流程完成', true, `${ ROUNDS } 轮跑完，主机账本共 ${ card.ledger.length } 条记录` );
 
   const ledger = card.ledger;
@@ -230,9 +234,9 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
     `初始 ${ card.initialProbeLoss.toFixed( 3 ) } → 最终 ${ card.finalProbeLoss.toFixed( 3 ) }` );
 
   // --- 全网一致 ---
-  const digA = weightsDigest( boxA.node.engineRef.getWeights() );
-  const digB = weightsDigest( boxB.node.engineRef.getWeights() );
-  const digC = weightsDigest( boxC.node.engineRef.getWeights() );
+  const digA = weightsDigest( await boxA.node.engineRef.getWeights() );
+  const digB = weightsDigest( await boxB.node.engineRef.getWeights() );
+  const digC = weightsDigest( await boxC.node.engineRef.getWeights() );
   check( '广播后所有节点收敛到同一份全局权重', digA === digB && digB === digC,
     `摘要 A=${ digA } B=${ digB } C=${ digC }` );
   check( '全局权重确实被更新（非空转）', digA !== initialDigest,

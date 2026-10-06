@@ -13,20 +13,64 @@
 /** 训练引擎标识。同一房间内所有节点必须一致。 */
 export type EngineId = 'mlp' | 'gpu-tinygpt';
 
-/** 模型规格 —— 写进 manifest，所有节点据此构造完全相同的初始模型。 */
-export interface ModelSpec
+/** 纯 JS 字符级小模型（零依赖，任何设备可跑，无需安全上下文）。 */
+export interface MlpModelSpec
 {
-  engine: EngineId;
-  /** 字符表大小 */
+  engine: 'mlp';
   vocabSize: number;
   /** 上下文窗口（字符数） */
   ctx: number;
-  /** 字符嵌入维度 */
   embDim: number;
-  /** 隐层宽度 */
   hidden: number;
-  /** 初始权重种子 —— 保证所有节点从同一个模型出发 */
   seed: number;
+}
+
+/** 工程内 WebGPU tiny-GPT 训练器（需要安全上下文 + WebGPU 适配器）。 */
+export interface GpuModelSpec
+{
+  engine: 'gpu-tinygpt';
+  vocabSize: number;
+  blockSize: number;
+  nLayer: number;
+  nHead: number;
+  nEmbd: number;
+  bias: boolean;
+  /** 一次前向最多几条件序列（决定激活 arena 大小） */
+  maxBatch: number;
+  seed: number;
+}
+
+/** 模型规格 —— 写进 manifest，所有节点据此构造完全相同的初始模型。 */
+export type ModelSpec = MlpModelSpec | GpuModelSpec;
+
+/** 上下文长度：两种引擎叫法不同，但语义一样，统一走这个函数。 */
+export function specContext ( spec: ModelSpec ): number
+{
+  return spec.engine === 'mlp' ? spec.ctx : spec.blockSize;
+}
+
+export function specLabel ( spec: ModelSpec ): string
+{
+  return spec.engine === 'mlp'
+    ? `mlp · ctx ${ spec.ctx } · emb ${ spec.embDim } · hidden ${ spec.hidden }`
+    : `gpu-tinygpt · blockSize ${ spec.blockSize } · ${ spec.nLayer }L${ spec.nHead }H · nEmbd ${ spec.nEmbd } · bias ${ spec.bias ? 'on' : 'off' }`;
+}
+
+/**
+ * 聚合方式。
+ *   fedavg  —— 加权平均各节点的绝对权重（经典同步 FedAvg）
+ *   diloco  —— 加权平均「参数增量 Δ」，再走外层带动量的累积更新：
+ *              M ← β·M + Δ̄ ;  G ← G + η·M
+ *              β=0、η=1 时退化为 fedavg。低通信联邦训练的常用做法，
+ *              在轮数少时收敛更快、对节点间差异更稳。
+ */
+export interface AggregateSpec
+{
+  mode: 'fedavg' | 'diloco';
+  /** 外层学习率 η */
+  outerLr: number;
+  /** 外层动量 β */
+  momentum: number;
 }
 
 /** 语料引用：名称 + 指纹 + 字符表。指纹决定「大家训的是不是同一份数据」。 */
@@ -63,6 +107,13 @@ export interface RoomManifest
   shards: number;
   corpus: CorpusRef;
   probe: ProbeRef;
+  /**
+   * 是否开启交叉校验（主机用提交的权重复算探针 loss，比对自报值）。
+   * 自用设备（都是自己的手机/电脑）没有作弊问题，关掉能省掉每个节点每轮的
+   * 一次额外评估 —— 对手机尤其值。默认关。
+   */
+  crossCheck: boolean;
+  aggregate: AggregateSpec;
   createdAt: number;
   /** 清单自身的指纹 */
   fingerprint: string;
@@ -277,6 +328,86 @@ export function weightsDigest ( w: NamedWeights ): string
 {
   const dec = decodeWeights( encodeWeights( w ) );
   return dec.digest;
+}
+
+/** 逐参数线性组合：out = a + s·b（形状必须一致）。 */
+export function addScaled ( a: NamedWeights, b: NamedWeights, s: number ): NamedWeights
+{
+  const out: NamedWeights = {};
+  for ( const k of Object.keys( a ) )
+  {
+    const x = a[ k ];
+    const y = b[ k ];
+    if ( !y || y.length !== x.length ) throw new Error( `addScaled: 参数 ${ k } 形状不一致` );
+    const r = new Float32Array( x.length );
+    for ( let i = 0; i < x.length; i++ ) r[ i ] = x[ i ] + s * y[ i ];
+    out[ k ] = r;
+  }
+  return out;
+}
+
+/** 逐参数相减：out = a - b。 */
+export function subWeights ( a: NamedWeights, b: NamedWeights ): NamedWeights
+{
+  return addScaled( a, b, -1 );
+}
+
+/** 逐参数缩放。 */
+export function scaleWeights ( w: NamedWeights, s: number ): NamedWeights
+{
+  const out: NamedWeights = {};
+  for ( const k of Object.keys( w ) )
+  {
+    const x = w[ k ];
+    const r = new Float32Array( x.length );
+    for ( let i = 0; i < x.length; i++ ) r[ i ] = x[ i ] * s;
+    out[ k ] = r;
+  }
+  return out;
+}
+
+/** 聚合器的状态：外层动量（fedavg 模式下不用）。 */
+export interface AggregateState
+{
+  momentum: NamedWeights | null;
+}
+
+/**
+ * 把各节点相对基准点的增量加权平均，再作用回基准点。纯函数，便于单独验证。
+ *
+ *   fedavg : G ← base + Δ̄
+ *   diloco : M ← β·M + Δ̄ ;  G ← base + η·M
+ *
+ * 之所以能共用骨架：Σω=1 时 `base + Σω(W_i - base)` 恒等于 `Σω·W_i`，
+ * 因此 fedavg 只是 diloco 在 β=0、η=1 时的特例。
+ *
+ * 注意：会就地更新 state.momentum（diloco 需要跨轮累积）。
+ */
+export function aggregateGlobal (
+  base: NamedWeights,
+  accepted: NamedWeights[],
+  sizes: number[],
+  agg: AggregateSpec,
+  state: AggregateState,
+): NamedWeights
+{
+  if ( accepted.length === 0 ) throw new Error( 'aggregateGlobal: 没有可聚合的节点' );
+  const meanDelta = fedAvg( accepted.map( ( w ) => subWeights( w, base ) ), sizes );
+
+  if ( agg.mode === 'fedavg' ) return addScaled( base, meanDelta, 1 );
+
+  const prev = state.momentum ?? zerosLike( base );
+  const next = addScaled( scaleWeights( prev, agg.momentum ), meanDelta, 1 );
+  state.momentum = next;
+  return addScaled( base, next, agg.outerLr );
+}
+
+/** 与给定权重同形状的全零副本（外层动量初值、形状探测用）。 */
+export function zerosLike ( w: NamedWeights ): NamedWeights
+{
+  const out: NamedWeights = {};
+  for ( const k of Object.keys( w ) ) out[ k ] = new Float32Array( w[ k ].length );
+  return out;
 }
 
 /** 逐参数 L2 距离 ||a - b||₂。 */

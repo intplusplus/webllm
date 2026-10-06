@@ -26,12 +26,15 @@
 import type { Corpus } from './corpus';
 import { buildStoi, encodeTo, filterToVocab, shardText } from './corpus';
 import { createEngine, type TrainEngine } from './engine';
+import { detectKind } from './capability';
 import {
+  aggregateGlobal,
   decodeWeights,
   encodeWeights,
-  fedAvg,
   l2Distance,
+  specContext,
   weightsDigest,
+  type AggregateState,
   type ControlMessage,
   type LedgerEntry,
   type NamedWeights,
@@ -44,6 +47,8 @@ import type { PeerInfo, Transport } from './transport';
 const PROBE_EVAL_COUNT = 256;
 const VERIFY_TOL = 1e-3;
 const ROUND_TIMEOUT_MS = 30000;
+/** 首次连接要多等一会儿：手机加入 + 首次编译 WGSL 都不快。 */
+const FIRST_ROUND_TIMEOUT_MS = 60000;
 
 export interface ModelCard
 {
@@ -122,8 +127,10 @@ export class FedNode
   private trainIds: Uint32Array = new Uint32Array( 0 );
   private probeIds: Uint32Array = new Uint32Array( 0 );
 
-  /** 上一轮结束时的全局权重（用于算 Δ 范数） */
+  /** 上一轮结束时的全局权重（用于算 Δ 范数、以及聚合的基准点） */
   private prevGlobal: NamedWeights | null = null;
+  /** 聚合器状态（DiLoCo 的外层动量）。 */
+  private readonly aggState: AggregateState = { momentum: null };
   private readonly submissions = new Map<string, Submission>();
   private readonly ledger: LedgerEntry[] = [];
   private readonly credits = new Map<string, { chars: number; digest: string }>();
@@ -172,7 +179,7 @@ export class FedNode
 
     const probeText = this.o.corpus.text.slice( m.probe.offset, m.probe.offset + m.probe.size );
     this.probeIds = encodeTo( probeText, this.stoi );
-    if ( this.probeIds.length < m.model.ctx + 32 ) throw new Error( '共识探针数据不足' );
+    if ( this.probeIds.length < specContext( m.model ) + 32 ) throw new Error( '共识探针数据不足' );
 
     if ( filtered.text.length > 64 )
     {
@@ -207,8 +214,22 @@ export class FedNode
         case 'assign':
           if ( !this.manifest )
           {
-            this.adoptManifest( msg.manifest, msg.shardIndex );
-            this.o.events.onStatus( '已收到任务分配，等待主机开轮…' );
+            try
+            {
+              this.adoptManifest( msg.manifest, msg.shardIndex );
+              this.o.events.onStatus( '已收到任务分配，等待主机开轮…' );
+            }
+            catch ( err )
+            {
+              // 最常见的失败：房间用 WebGPU 引擎，而本机没有可用的 WebGPU。
+              // 权重形状不同，没法混训 —— 必须说清楚该怎么办，不能只抛个异常。
+              const detail = ( err as Error ).message;
+              this.o.events.onStatus( `无法加入房间：${ detail }` );
+              this.o.events.onLog(
+                `收到任务分配，但本机构造模型失败：${ detail }。` +
+                '房间的引擎对全网必须一致，因此本机无法参与 —— 请让主机把「训练引擎」改成「只用 CPU」重建房间。',
+              );
+            }
           }
           break;
         case 'round/open':
@@ -221,7 +242,7 @@ export class FedNode
           if ( this.firstProbeLoss === 0 ) this.firstProbeLoss = msg.stats.globalLoss;
           this.ledger.push( ...msg.stats.entries );
           this.o.events.onRound( msg.stats, roster );
-          if ( roster > 0 && msg.stats.round >= roster ) this.finish();
+          if ( roster > 0 && msg.stats.round >= roster ) void this.finish();
           break;
         }
         default:
@@ -288,6 +309,9 @@ export class FedNode
   onPeerOpen ( peerId: string ): void
   {
     this.o.events.onLog( `P2P 通道就绪：${ peerId.slice( 0, 6 ) }` );
+    // 通道就绪会改变节点表里的「状态」列，必须重绘一次
+    // （onRoster 只在成员变化时触发，早于通道打开，否则界面会一直显示"连接中"）
+    this.o.events.onRoster( [ ...this.rosterMap.values() ], this.selfId );
     if ( this.o.role === 'peer' )
     {
       this.hostId = peerId;
@@ -326,11 +350,29 @@ export class FedNode
 
   // ---------------------------------------------------------------- 本地训练
 
-  private async localPhase ( round: number ): Promise<{ weights: NamedWeights; meta: WeightMeta }>
+  /**
+   * 探针评估的样本量。GPU 引擎每批都要回读 logits，代价比 CPU 高，
+   * 所以用量少一些 —— 它只用于「展示全局 loss 走势」，不需要很高精度。
+   */
+  private probeCount (): number
+  {
+    return this.engine.spec.engine === 'gpu-tinygpt' ? 64 : PROBE_EVAL_COUNT;
+  }
+
+  private async evalProbe (): Promise<number>
+  {
+    const m = this.manifest;
+    if ( !m ) throw new Error( 'evalProbe: 清单尚未确定' );
+    return this.engine.evalAt( this.probeIds, specContext( m.model ), this.probeCount() );
+  }
+
+  private async localPhase ( round: number ): Promise<{ weights: NamedWeights; meta: WeightMeta; base: NamedWeights }>
   {
     const m = this.manifest;
     if ( !m ) throw new Error( 'localPhase: 清单尚未确定' );
-    const before = this.prevGlobal ?? this.engine.getWeights();
+    // base = 本轮开始时的共同出发点。主机是上一轮广播的全局权重；
+    // 还没广播过（第一轮或单节点）时，就是本机当前权重。聚合要用它做基准。
+    const base = this.prevGlobal ?? await this.engine.getWeights();
 
     let loss = 0;
     let tokens = 0;
@@ -342,8 +384,9 @@ export class FedNode
     }
     loss /= m.localSteps;
 
-    const weights = this.engine.getWeights();
-    const probeLoss = await this.engine.evalAt( this.probeIds, m.model.ctx, PROBE_EVAL_COUNT );
+    const weights = await this.engine.getWeights();
+    // 关掉交叉校验时不跑探针 —— 省掉每个节点每轮的一次额外评估（手机尤其有感）
+    const probeLoss = m.crossCheck ? await this.evalProbe() : 0;
     const meta: WeightMeta = {
       round,
       peerId: this.selfId,
@@ -351,10 +394,10 @@ export class FedNode
       tokens,
       localLoss: loss,
       probeLoss,
-      deltaNorm: l2Distance( weights, before ),
+      deltaNorm: l2Distance( weights, base ),
       digest: weightsDigest( weights ),
     };
-    return { weights, meta };
+    return { weights, meta, base };
   }
 
   // ---------------------------------------------------------------- 主机主循环
@@ -369,8 +412,16 @@ export class FedNode
     const m = this.manifest;
 
     // 初始（未训练）模型基线
-    this.initialProbeLoss = await this.engine.evalAt( this.probeIds, m.model.ctx, PROBE_EVAL_COUNT );
+    this.initialProbeLoss = await this.evalProbe();
     this.o.events.onLog( `初始模型探针 loss = ${ this.initialProbeLoss.toFixed( 3 ) }（未训练的基线）` );
+    this.o.events.onLog(
+      `引擎 ${ m.model.engine } · 聚合 ${ m.aggregate.mode }` +
+      ( m.crossCheck ? ' · 交叉校验开' : ' · 交叉校验关（自用设备，省一轮评估）' ),
+    );
+    if ( m.aggregate.mode === 'diloco' )
+    {
+      this.aggState.momentum = null; // 从零开始累积外层动量
+    }
 
     for ( const p of this.rosterMap.values() ) if ( p.role === 'peer' ) this.sendAssign( p.peerId );
 
@@ -383,7 +434,7 @@ export class FedNode
         if ( this.stopped ) break;
         await this.hostRound( r );
       }
-      if ( !this.stopped ) this.finish();
+      if ( !this.stopped ) await this.finish();
     }
     catch ( err )
     {
@@ -414,7 +465,9 @@ export class FedNode
     this.o.events.onStatus( `第 ${ round }/${ m.rounds } 轮 · 本机完成（loss ${ mine.meta.localLoss.toFixed( 3 ) }），等待节点上报…` );
 
     const peers = [ ...this.rosterMap.values() ].filter( ( p ) => p.role === 'peer' );
-    const deadline = performance.now() + ROUND_TIMEOUT_MS;
+    // 第一轮给更长的窗口：手机建连 + 首次编译 WGSL 都不快
+    const budget = round === 1 ? FIRST_ROUND_TIMEOUT_MS : ROUND_TIMEOUT_MS;
+    const deadline = performance.now() + budget;
     while ( this.submissions.size < peers.length && performance.now() < deadline && !this.stopped )
     {
       await sleep( 120 );
@@ -448,10 +501,11 @@ export class FedNode
       }
     }
 
-    const global = fedAvg( accepted, sizes );
+    // ---- 聚合：两种模式共用同一个「基准点 + 加权增量」骨架（数学在 protocol.ts） ----
+    const global = aggregateGlobal( mine.base, accepted, sizes, m.aggregate, this.aggState );
     this.engine.setWeights( global );
 
-    const probe = await this.engine.evalAt( this.probeIds, m.model.ctx, PROBE_EVAL_COUNT );
+    const probe = await this.evalProbe();
     const prevProbe = this.lastProbeLoss === 0 ? probe : this.lastProbeLoss;
     if ( this.firstProbeLoss === 0 ) this.firstProbeLoss = probe;
     this.lastProbeLoss = probe;
@@ -493,11 +547,12 @@ export class FedNode
   private async verify ( meta: WeightMeta, weights: NamedWeights ): Promise<{ ok: boolean; note: string }>
   {
     const m = this.manifest!;
+    if ( !m.crossCheck ) return { ok: true, note: '未开启交叉校验（自用设备，省掉一轮评估）' };
     try
     {
       const probeEngine = this.engineFactory( m.model );
       probeEngine.setWeights( weights );
-      const recomputed = await probeEngine.evalAt( this.probeIds, m.model.ctx, PROBE_EVAL_COUNT );
+      const recomputed = await probeEngine.evalAt( this.probeIds, specContext( m.model ), this.probeCount() );
       const diff = Math.abs( recomputed - meta.probeLoss );
       const tol = VERIFY_TOL * Math.max( 1, Math.abs( meta.probeLoss ) );
       if ( diff > tol )
@@ -570,15 +625,15 @@ export class FedNode
     this.o.events.onStatus( '已请求停止（当前轮结束后退出）' );
   }
 
-  private finish (): void
+  private async finish (): Promise<void>
   {
     if ( !this.manifest ) return;
-    const card = this.buildCard( this.manifest );
+    const card = await this.buildCard( this.manifest );
     this.o.events.onDone( card );
     this.o.events.onStatus( `训练完成 · 全局探针 loss ${ card.finalProbeLoss.toFixed( 3 ) }` );
   }
 
-  buildCard ( m: RoomManifest ): ModelCard
+  async buildCard ( m: RoomManifest ): Promise<ModelCard>
   {
     const byPeer = new Map<string, ModelCard[ 'contributors' ][ number ]>();
     const ensure = ( peerId: string, name: string, deviceKind: string ): ModelCard[ 'contributors' ][ number ] =>
@@ -609,20 +664,20 @@ export class FedNode
       firstProbeLoss: this.firstProbeLoss,
       finalProbeLoss: this.lastProbeLoss,
       paramCount: this.engine.paramCount(),
-      weightsDigest: weightsDigest( this.engine.getWeights() ),
+      weightsDigest: weightsDigest( await this.engine.getWeights() ),
       transportBytes: this.transportBytes,
       ledger: this.ledger,
       contributors: [ ...byPeer.values() ],
-      note: '信任层 v0：清单指纹 + 共识探针复算 + 贡献账本。摘要算法为 FNV-1a（非密码学安全），尚无质押与惩罚机制。',
+      note: '清单指纹 + 贡献账本 + 可复现（固定种子 + 确定性评估）。摘要算法为 FNV-1a（非密码学安全）。',
     };
   }
 
   /** 当前全局权重的可下载字节。 */
-  exportGlobalWeights (): ArrayBuffer | null
+  async exportGlobalWeights (): Promise<ArrayBuffer | null>
   {
     try
     {
-      return encodeWeights( this.engine.getWeights() );
+      return encodeWeights( await this.engine.getWeights() );
     }
     catch
     {
@@ -635,16 +690,4 @@ function sleep ( ms: number ): Promise<void>
 {
   // 用 globalThis 而非 window：同一份编排代码要能在浏览器与 Node（无头端到端测试）里跑
   return new Promise( ( r ) => globalThis.setTimeout( r, ms ) );
-}
-
-/** 根据 UA 粗判设备类别（仅用于展示）。 */
-export function detectKind (): string
-{
-  const ua = navigator.userAgent;
-  if ( /Android/i.test( ua ) ) return 'Android';
-  if ( /iPhone|iPad|iPod/i.test( ua ) ) return 'iOS';
-  if ( /Macintosh/i.test( ua ) ) return 'macOS';
-  if ( /Windows/i.test( ua ) ) return 'Windows';
-  if ( /Linux/i.test( ua ) ) return 'Linux';
-  return '未知设备';
 }

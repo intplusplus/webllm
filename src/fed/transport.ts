@@ -57,12 +57,35 @@ interface SignalFrame
   [ k: string ]: unknown;
 }
 
-/** 单条 P2P 连接。 */
+/**
+ * 单条 P2P 连接。
+ *
+ * 二进制帧必须分块：RTCDataChannel 有单条消息上限（Chrome 常见 256 KiB，
+ * 也可能只有 64 KiB），而 WebGPU tiny-GPT 的权重帧约 425 KB —— 直接发会抛
+ * 「Trying to send message larger than max-message-size」。
+ * MLP 模型只有 54 KB 所以一直没暴露这个问题。
+ *
+ * 分块信封：[u32 传输号][u32 序号][u32 总片数][载荷]。
+ * 数据通道是有序可靠的，所以按序收齐即拼回，不需要超时重传。
+ * 所有二进制帧都走信封（包括小帧），这样接收端不需要猜。
+ */
+const CHUNK_SIZE = 16 * 1024;
+const CHUNK_HEADER = 12;
+
+interface Inbound
+{
+  total: number;
+  parts: ArrayBuffer[];
+  got: number;
+}
+
 class RoomLink
 {
   readonly peerId: string;
   private readonly pc: RTCPeerConnection;
   private dc: RTCDataChannel | null = null;
+  private readonly inbox = new Map<number, Inbound>();
+  private nextTransferId = 1;
 
   onMessage: ( data: string | ArrayBuffer ) => void = () => {};
   onOpen: () => void = () => {};
@@ -81,7 +104,52 @@ class RoomLink
     dc.binaryType = 'arraybuffer';
     dc.onopen = () => this.onOpen();
     dc.onclose = () => this.onClose();
-    dc.onmessage = ( ev ) => this.onMessage( ev.data as string | ArrayBuffer );
+    dc.onmessage = ( ev ) => this.onFrame( ev.data as string | ArrayBuffer );
+  }
+
+  private onFrame ( data: string | ArrayBuffer ): void
+  {
+    if ( typeof data === 'string' )
+    {
+      this.onMessage( data );
+      return;
+    }
+    const buf = data;
+    if ( buf.byteLength < CHUNK_HEADER )
+    {
+      // 不该出现：所有二进制帧都带信封。当作坏帧丢掉，避免污染解析。
+      return;
+    }
+    const dv = new DataView( buf );
+    const id = dv.getUint32( 0 );
+    const seq = dv.getUint32( 4 );
+    const total = dv.getUint32( 8 );
+    const payload = buf.slice( CHUNK_HEADER );
+
+    let entry = this.inbox.get( id );
+    if ( !entry )
+    {
+      entry = { total, parts: new Array<ArrayBuffer>( total ), got: 0 };
+      this.inbox.set( id, entry );
+    }
+    if ( entry.parts[ seq ] === undefined )
+    {
+      entry.parts[ seq ] = payload;
+      entry.got += 1;
+    }
+    if ( entry.got < entry.total ) return;
+
+    this.inbox.delete( id );
+    let size = 0;
+    for ( const p of entry.parts ) size += p.byteLength;
+    const out = new Uint8Array( size );
+    let off = 0;
+    for ( const p of entry.parts )
+    {
+      out.set( new Uint8Array( p ), off );
+      off += p.byteLength;
+    }
+    this.onMessage( out.buffer );
   }
 
   get pcRef (): RTCPeerConnection
@@ -97,9 +165,29 @@ class RoomLink
   send ( data: string | ArrayBuffer ): boolean
   {
     if ( !this.dc || this.dc.readyState !== 'open' ) return false;
-    // 分支调用：RTCDataChannel.send 是重载签名，联合类型无法直接匹配
-    if ( typeof data === 'string' ) this.dc.send( data );
-    else this.dc.send( data );
+    if ( typeof data === 'string' )
+    {
+      this.dc.send( data );
+      return true;
+    }
+
+    const buf = data;
+    const total = Math.max( 1, Math.ceil( buf.byteLength / CHUNK_SIZE ) );
+    const id = this.nextTransferId++;
+    const src = new Uint8Array( buf );
+    for ( let seq = 0; seq < total; seq++ )
+    {
+      const start = seq * CHUNK_SIZE;
+      const end = Math.min( start + CHUNK_SIZE, buf.byteLength );
+      const msg = new ArrayBuffer( CHUNK_HEADER + ( end - start ) );
+      const dv = new DataView( msg );
+      dv.setUint32( 0, id );
+      dv.setUint32( 4, seq );
+      dv.setUint32( 8, total );
+      new Uint8Array( msg, CHUNK_HEADER ).set( src.subarray( start, end ) );
+      this.dc.send( msg );
+    }
+    if ( this.nextTransferId > 0xfffffff0 ) this.nextTransferId = 1;
     return true;
   }
 

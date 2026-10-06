@@ -12,6 +12,8 @@ import './fed.css';
 import { corpusDigest, loadBuiltinCorpus, pickProbe, type Corpus } from '../fed/corpus';
 import {
   fingerprintOf,
+  specLabel,
+  type AggregateSpec,
   type ControlMessage,
   type DevCap,
   type LedgerEntry,
@@ -21,7 +23,12 @@ import {
 } from '../fed/protocol';
 import { RoomTransport, type PeerInfo, type Transport } from '../fed/transport';
 import { LocalBus } from '../fed/bus';
-import { detectKind, FedNode, type ModelCard, type NodeEvents } from '../fed/node';
+import {
+  detectKind,
+  probeCapability,
+  type Capability,
+} from '../fed/capability';
+import { FedNode, type ModelCard, type NodeEvents } from '../fed/node';
 
 // ------------------------------------------------------------------ 小工具
 
@@ -93,7 +100,9 @@ export function renderFedApp ( root: HTMLElement ): void
   let manifest: RoomManifest | null = null;
   let role: 'host' | 'peer' | null = null;
   let busy = false;
+  let ready = false;
   let self: PeerInfo | null = null;
+  let cap: Capability | null = null;
 
   const curveLocal: Array<{ x: number; y: number }> = [];
   const curveGlobal: Array<{ x: number; y: number }> = [];
@@ -155,9 +164,33 @@ export function renderFedApp ( root: HTMLElement ): void
   const devInfo = el( 'p', 'hint' );
   {
     const d = detectDevice();
-    devInfo.textContent = `本机：${ d.kind } · ${ d.cores } 核 · WebGPU ${ d.webgpu ? '可用' : '不可用（本 demo 默认引擎不需要它）' }`;
+    devInfo.textContent = `本机：${ d.kind } · ${ d.cores } 核 · 内存约 ${ d.memoryGB || '?' } GB · WebGPU ${ d.webgpu ? 'API 可用' : 'API 不可用' }`;
   }
   cardConnect.append( devInfo );
+
+  // 能力诊断：WebGPU 能不能用，取决于「安全上下文」和「能否拿到适配器」两件事，
+  // 两件都可能失败且失败原因不同，所以如实逐项显示 + 给出可执行建议。
+  const capBox = el( 'div', 'fed-capbox', '正在探测设备能力…' );
+  cardConnect.append( capBox );
+
+  // 训练引擎：必须在建房前定，因为它会写进房间清单（所有节点必须一致）
+  const rowEngine = el( 'div', 'fed-row' );
+  rowEngine.append( el( 'label', undefined, '训练引擎' ) );
+  const inEngine = el( 'select', 'fed-input' ) as HTMLSelectElement;
+  for ( const [ value, text ] of [
+    [ 'auto', '自动（WebGPU 可用就用，否则回退 CPU）' ],
+    [ 'gpu', '只用 WebGPU（所有设备都必须支持）' ],
+    [ 'cpu', '只用 CPU（兼容性最好）' ],
+  ] as Array<[ string, string ]> )
+  {
+    const opt = el( 'option' ) as HTMLOptionElement;
+    opt.value = value;
+    opt.textContent = text;
+    inEngine.append( opt );
+  }
+  inEngine.value = 'auto';
+  rowEngine.append( inEngine );
+  cardConnect.append( rowEngine );
 
   const rowBtns = el( 'div', 'fed-row' );
   const btnHost = el( 'button', 'fed-btn primary', '创建训练房间（主机）' ) as HTMLButtonElement;
@@ -223,6 +256,37 @@ export function renderFedApp ( root: HTMLElement ): void
     rowParams.append( wrap );
   }
   cardTrain.append( rowParams );
+
+  const rowAgg = el( 'div', 'fed-row' );
+  rowAgg.append( el( 'label', undefined, '聚合方式' ) );
+  const inAgg = el( 'select', 'fed-input' ) as HTMLSelectElement;
+  for ( const [ value, text ] of [
+    [ 'fedavg', 'FedAvg：直接平均权重（小规模实测更优，默认）' ],
+    [ 'diloco', 'DiLoCo：平均「参数增量」+ 外层动量（大 H、多轮时更省通信）' ],
+  ] as Array<[ string, string ]> )
+  {
+    const opt = el( 'option' ) as HTMLOptionElement;
+    opt.value = value;
+    opt.textContent = text;
+    inAgg.append( opt );
+  }
+  inAgg.value = 'fedavg';
+  rowAgg.append( inAgg );
+  cardTrain.append( rowAgg );
+  cardTrain.append( el( 'p', 'hint',
+    '两者共用同一个「基准点 + 加权增量」骨架：FedAvg 就是 DiLoCo 在 β=0、η=1 时的特例。' +
+    '本仓库自检实测（2 节点、6 轮、每轮 10 步、MLP 小模型）：FedAvg 2.824 vs DiLoCo(η=0.7,β=0.9) 3.310 —— ' +
+    '规模这么小时 FedAvg 反而更好；DiLoCo 的收益要点是大 H（每轮本地步数多）、多轮、链路慢。' ) );
+
+  const rowOpts = el( 'div', 'fed-row' );
+  const crossLabel = el( 'label', 'fed-check' );
+  const inCross = el( 'input' ) as HTMLInputElement;
+  inCross.type = 'checkbox';
+  crossLabel.append( inCross, document.createTextNode( '开启交叉校验（用提交的权重复算探针 loss，比对自报值）' ) );
+  rowOpts.append( crossLabel );
+  cardTrain.append( rowOpts );
+  cardTrain.append( el( 'p', 'hint',
+    '都是自己的设备时不需要防作弊，关掉交叉校验能省掉每个节点每轮的一次额外评估（手机上尤其有感）。' ) );
 
   const rowTrainBtns = el( 'div', 'fed-row' );
   const btnStart = el( 'button', 'fed-btn primary', '▶ 开始训练' ) as HTMLButtonElement;
@@ -307,6 +371,26 @@ export function renderFedApp ( root: HTMLElement ): void
     modeHint.textContent = local
       ? '本机模式：同一个浏览器再开一个标签页，填同一个房间 ID，两边就能互相训练。全程走 BroadcastChannel，不需要任何服务器。'
       : '跨设备模式：手机与电脑在同一 WiFi 下，手机打开终端里打印的局域网地址，填同一个房间 ID 加入即可。需要信令服务器（npm run demo 会一起起）。';
+    renderCapability( cap, null );
+  }
+
+  /**
+   * 换引擎时给一套合适的默认超参。
+   * MLP 是纯 JS、可以吃大 batch 和学习率；WebGPU tiny-GPT 反之（AdamW 对 lr 敏感得多）。
+   * URL 里显式给了的参数不覆盖。
+   */
+  function applyEngineDefaults (): void
+  {
+    const gpu = inEngine.value === 'gpu' || ( inEngine.value === 'auto' && cap?.adapterOk === true );
+    const quick = qp( 'quick' ) !== null;
+    const set = ( input: HTMLInputElement, name: string, value: string ): void =>
+    {
+      if ( qp( name ) === null ) input.value = value;
+    };
+    set( inBatch[ 1 ], 'batch', gpu ? '8' : ( quick ? '16' : '32' ) );
+    set( inLr[ 1 ], 'lr', gpu ? '0.003' : '0.02' );
+    set( inSteps[ 1 ], 'steps', gpu ? '8' : ( quick ? '8' : '20' ) );
+    set( inRounds[ 1 ], 'rounds', quick ? '6' : ( gpu ? '12' : '30' ) );
   }
 
   function setStatus ( t: string ): void
@@ -323,6 +407,55 @@ export function renderFedApp ( root: HTMLElement ): void
     logPre.scrollTop = logPre.scrollHeight;
   }
 
+  function renderCapability ( c: Capability | null, error: string | null ): void
+  {
+    capBox.innerHTML = '';
+    if ( error )
+    {
+      capBox.append( el( 'div', 'bad', `能力探测失败：${ error }` ) );
+      return;
+    }
+    if ( !c )
+    {
+      capBox.textContent = '正在探测设备能力…';
+      return;
+    }
+    const line = ( label: string, ok: boolean, text: string ): void =>
+    {
+      const d = el( 'div' );
+      d.append( el( 'span', ok ? 'good' : 'bad', ok ? '✓ ' : '✗ ' ) );
+      d.append( el( 'b', undefined, label + '：' ) );
+      d.append( document.createTextNode( text ) );
+      capBox.append( d );
+    };
+    line( '安全上下文', c.secureContext, c.secureContext ? '是（https 或 localhost）' : '否 —— 浏览器会禁掉 WebGPU' );
+    line( 'navigator.gpu', c.hasWebGpuApi, c.hasWebGpuApi ? '存在' : '不存在' );
+    line( 'GPU 适配器', c.adapterOk, c.adapterOk
+      ? `${ c.vendor || '?' } / ${ c.architecture || '?' } / ${ c.device || '?' }`
+      : ( c.adapterError ?? '未取得' ) );
+    if ( c.adapterOk )
+    {
+      line( 'shader-f16', c.hasF16, c.hasF16 ? '支持' : '不支持（只能 fp32）' );
+      line( 'maxBufferSize', true, `${ ( c.maxBufferSize / 1024 / 1024 / 1024 ).toFixed( 2 ) } GiB` );
+    }
+    const usable = c.adapterOk;
+    const want = inEngine.value;
+    const willUse = want === 'gpu' ? ( usable ? 'gpu-tinygpt' : '（不可用，建房会失败）' )
+      : want === 'cpu' ? 'mlp（CPU）'
+        : usable ? 'gpu-tinygpt（WebGPU）' : 'mlp（CPU 回退）';
+    const pick = el( 'div' );
+    pick.append( el( 'b', undefined, '本机将使用的引擎：' ) );
+    pick.append( document.createTextNode( willUse ) );
+    capBox.append( pick );
+
+    if ( c.advise.length > 0 )
+    {
+      const a = el( 'div', 'advise' );
+      for ( const t of c.advise ) a.append( el( 'div', undefined, '• ' + t ) );
+      capBox.append( a );
+    }
+  }
+
   function renderManifest ( m: RoomManifest, shardIndex: number ): void
   {
     taskBody.innerHTML = '';
@@ -333,9 +466,13 @@ export function renderFedApp ( root: HTMLElement ): void
     };
     add( '任务', m.taskName );
     add( '清单指纹', m.fingerprint );
-    add( '模型', `${ m.model.engine } · vocab ${ m.model.vocabSize } · ctx ${ m.model.ctx } · emb ${ m.model.embDim } · hidden ${ m.model.hidden } · seed ${ m.model.seed }` );
+    add( '模型', `${ specLabel( m.model ) } · vocab ${ m.model.vocabSize } · seed ${ m.model.seed }` );
     add( '轮次 / 每轮步数', `${ m.rounds } × ${ m.localSteps } 步 × ${ m.batchSize } 序列` );
     add( '学习率', String( m.lr ) );
+    add( '聚合', m.aggregate.mode === 'diloco'
+      ? `DiLoCo（外层 lr ${ m.aggregate.outerLr }，动量 ${ m.aggregate.momentum }）`
+      : 'FedAvg（直接平均权重）' );
+    add( '交叉校验', m.crossCheck ? '开启' : '关闭（自用设备）' );
     add( '分片', `${ m.shards } 片 · 我是 #${ shardIndex }` );
     add( '语料', `${ m.corpus.name } · ${ m.corpus.chars.toLocaleString() } 字符` );
     add( '语料指纹', m.corpus.digest );
@@ -592,9 +729,12 @@ export function renderFedApp ( root: HTMLElement ): void
     };
     btnW.onclick = () =>
     {
-      const buf = node?.exportGlobalWeights();
-      if ( !buf ) return;
-      downloadBlob( new Blob( [ buf ], { type: 'application/octet-stream' } ), `global-weights-${ c.manifest.roomId }.wlfd` );
+      void ( async () =>
+      {
+        const buf = await node?.exportGlobalWeights();
+        if ( !buf ) return;
+        downloadBlob( new Blob( [ buf ], { type: 'application/octet-stream' } ), `global-weights-${ c.manifest.roomId }.wlfd` );
+      } )();
     };
     row.append( btnCard, btnW );
     outBody.append( row );
@@ -619,30 +759,60 @@ export function renderFedApp ( root: HTMLElement ): void
     busy = v;
     btnStart.disabled = v || manifest === null || role !== 'host';
     btnStop.disabled = !v || role !== 'host';
-    btnHost.disabled = v || transport !== null;
-    btnJoin.disabled = v || transport !== null;
+    btnHost.disabled = v || transport !== null || !ready;
+    btnJoin.disabled = v || transport !== null || !ready;
     btnLeave.disabled = transport === null;
+  }
+
+  /** 语料与能力探测都完成后才允许建房/加入 —— 否则 createEngine 拿不到 GPU 上下文。 */
+  function markReady (): void
+  {
+    ready = true;
+    setBusy( busy );
   }
 
   function buildManifest ( corpusRef: Corpus ): RoomManifest
   {
-    const model: ModelSpec = {
-      engine: 'mlp',
-      vocabSize: corpusRef.vocab.length,
-      ctx: 8,
-      embDim: 16,
-      hidden: 64,
-      seed: 20261006,
+    // 引擎必须在建房时定死：它写进清单，所有节点按同一份规格构造模型，否则权重无法聚合。
+    const want = inEngine.value;
+    const useGpu = want === 'gpu' || ( want === 'auto' && cap?.adapterOk === true );
+
+    const model: ModelSpec = useGpu
+      ? {
+        engine: 'gpu-tinygpt',
+        vocabSize: corpusRef.vocab.length,
+        blockSize: 32,
+        nLayer: 2,
+        nHead: 2,
+        nEmbd: 64,
+        bias: true,
+        maxBatch: 8,
+        seed: 20261006,
+      }
+      : {
+        engine: 'mlp',
+        vocabSize: corpusRef.vocab.length,
+        ctx: 8,
+        embDim: 16,
+        hidden: 64,
+        seed: 20261006,
+      };
+
+    const aggregate: AggregateSpec = {
+      mode: inAgg.value === 'fedavg' ? 'fedavg' : 'diloco',
+      outerLr: 1,
+      momentum: 0.9,
     };
+
     const base = {
       roomId: inRoom.value.trim() || 'room',
-      taskName: '字符级语言模型 · 联邦预训练',
-      taskBrief: '各节点在自己的语料分片上本地训练，按样本数加权做 FedAvg，合出一个全局语言模型。',
+      taskName: useGpu ? '字符级语言模型 · WebGPU tiny-GPT' : '字符级语言模型 · 联邦预训练',
+      taskBrief: '各节点在自己的语料分片上本地训练，按样本数加权聚合，合出一个全局语言模型。',
       model,
       rounds: Math.max( 1, Number( inRounds[ 1 ].value ) || 30 ),
       localSteps: Math.max( 1, Number( inSteps[ 1 ].value ) || 20 ),
       batchSize: Math.max( 1, Number( inBatch[ 1 ].value ) || 32 ),
-      lr: Math.max( 1e-4, Number( inLr[ 1 ].value ) || 0.02 ),
+      lr: Math.max( 1e-5, Number( inLr[ 1 ].value ) || 0.02 ),
       shards: Math.max( 1, Number( inShards[ 1 ].value ) || 4 ),
       corpus: {
         name: corpusRef.name,
@@ -651,6 +821,8 @@ export function renderFedApp ( root: HTMLElement ): void
         vocab: corpusRef.vocab,
       },
       probe: pickProbe( corpusRef, 1024 ),
+      crossCheck: inCross.checked,
+      aggregate,
       createdAt: Date.now(),
     };
     return { ...base, fingerprint: fingerprintOf( base ) };
@@ -811,20 +983,45 @@ export function renderFedApp ( root: HTMLElement ): void
   setBusy( false );
   syncMode();
   inMode.onchange = syncMode;
+  inEngine.onchange = () =>
+  {
+    applyEngineDefaults();
+    renderCapability( cap, null );
+  };
 
   void ( async () =>
   {
+    let corpusOk = false;
     try
     {
       corpus = await loadBuiltinCorpus();
       dataNote.textContent = `任务语料已加载：${ corpus.name } · ${ corpus.text.length.toLocaleString() } 字符 · 字符表 ${ corpus.vocab.length }`;
       addLog( `内置语料就绪：${ corpus.text.length } 字符，字符表 ${ corpus.vocab.length } 个（含大小写、标点、换行）` );
+      corpusOk = true;
     }
     catch ( err )
     {
       setStatus( `语料加载失败：${ ( err as Error ).message }` );
-      btnHost.disabled = true;
-      btnJoin.disabled = true;
     }
+
+    // 能力探测（同时把 WebGPU 上下文初始化好，createEngine 之后才拿得到）
+    try
+    {
+      cap = await probeCapability();
+      addLog(
+        `设备能力：安全上下文=${ cap.secureContext }，navigator.gpu=${ cap.hasWebGpuApi }，` +
+        `适配器=${ cap.adapterOk ? `可用（${ cap.device || cap.vendor || '?' }）` : `不可用：${ cap.adapterError ?? '未知' }` }`,
+      );
+      for ( const t of cap.advise ) addLog( '建议：' + t );
+    }
+    catch ( err )
+    {
+      renderCapability( null, ( err as Error ).message );
+      addLog( `能力探测失败：${ ( err as Error ).message }` );
+    }
+
+    applyEngineDefaults();
+    renderCapability( cap, null );
+    if ( corpusOk ) markReady();
   } )();
 }
