@@ -690,11 +690,10 @@ export function renderFedApp ( root: HTMLElement ): void
       ? new LocalBus( { roomId, self, ...callbacks } )
       : new RoomTransport( { signalUrl: inSignal.value.trim(), roomId, self, ...callbacks } );
     transport = t;
-    addLog( useLocal ? '使用本机总线（BroadcastChannel），无需信令服务器' : `使用 WebRTC，信令 ${ inSignal.value.trim() }` );
-    setBusy( true );
-    btnLeave.disabled = false;
-    await t.connect();
 
+    // 顺序很重要：先建节点、再连通道。
+    // 反过来的话，本机通道的 assign 可能在 FedNode 存在之前就送达而被丢掉 ——
+    // 症状是节点收不到任务清单，训练时一声不响（主机每轮白等 30s）。
     const m = wantRole === 'host' ? buildManifest( corpus ) : undefined;
     if ( m ) manifest = m;
     node = new FedNode( {
@@ -705,6 +704,19 @@ export function renderFedApp ( root: HTMLElement ): void
       contributionText: inContribution.value,
       manifest: m,
     } );
+
+    addLog( useLocal ? '使用本机总线（BroadcastChannel），无需信令服务器' : `使用 WebRTC，信令 ${ inSignal.value.trim() }` );
+    setBusy( true );
+    btnLeave.disabled = false;
+    try
+    {
+      await t.connect();
+    }
+    catch ( err )
+    {
+      resetConnection();
+      throw err;
+    }
     setBusy( false );
 
     if ( wantRole === 'host' )
@@ -717,6 +729,20 @@ export function renderFedApp ( root: HTMLElement ): void
       setStatus( '已加入，等待主机下发任务清单…' );
     }
     renderRoster( t.peerInfos, self.peerId );
+  }
+
+  function resetConnection (): void
+  {
+    node?.stop();
+    transport?.close();
+    transport = null;
+    node = null;
+    manifest = null;
+    role = null;
+    self = null;
+    setBusy( false );
+    btnStart.disabled = true;
+    btnGen.disabled = true;
   }
 
   // ---------- 按钮 ----------
@@ -739,16 +765,7 @@ export function renderFedApp ( root: HTMLElement ): void
   };
   btnLeave.onclick = () =>
   {
-    node?.stop();
-    transport?.close();
-    transport = null;
-    node = null;
-    manifest = null;
-    role = null;
-    self = null;
-    setBusy( false );
-    btnStart.disabled = true;
-    btnGen.disabled = true;
+    resetConnection();
     setStatus( '已断开' );
     addLog( '已断开与房间的连接' );
   };

@@ -130,6 +130,8 @@ export class FedNode
   private rosterMap = new Map<string, PeerInfo>();
   private hostId: string | null = null;
   private assignCounter = 0;
+  /** 每个节点被分到的数据分片。记住它，好在每轮开头重发 assign（同一条分片）。 */
+  private readonly assignedShards = new Map<string, number>();
 
   private startedAt = 0;
   private running = false;
@@ -312,8 +314,13 @@ export class FedNode
     const m = this.manifest;
     if ( !m ) return;
     const span = Math.max( 1, m.shards - 1 );
-    const idx = ( this.assignCounter % span ) + 1;
-    this.assignCounter += 1;
+    let idx = this.assignedShards.get( peerId );
+    if ( idx === undefined )
+    {
+      idx = ( this.assignCounter % span ) + 1;
+      this.assignCounter += 1;
+      this.assignedShards.set( peerId, idx );
+    }
     this.o.transport.sendControl( peerId, { t: 'assign', shardIndex: idx, manifest: m } );
   }
 
@@ -393,6 +400,13 @@ export class FedNode
     const m = this.manifest!;
     const t0 = performance.now();
     this.submissions.clear();
+
+    // 每轮开头重发一次 assign：幂等，但能救回「清单没送到」的节点 ——
+    // 比如节点在主机开轮之后才加入、或页面刷新过。已经拿到清单的节点会忽略它。
+    for ( const p of this.rosterMap.values() )
+    {
+      if ( p.role === 'peer' ) this.sendAssign( p.peerId );
+    }
 
     this.o.transport.broadcast( JSON.stringify( { t: 'round/open', round } satisfies ControlMessage ) );
 

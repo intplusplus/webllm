@@ -15,6 +15,7 @@
     "verify:fed": "node scripts/verify-fed.mjs",
     "verify:e2e": "node scripts/verify-e2e.mjs",
     "verify:signal": "node scripts/verify-signal.mjs",
+    "verify:ui": "node scripts/verify-ui.mjs",
     "fetch:model": "node scripts/fetch-model.mjs"
   },
   "devDependencies": {
