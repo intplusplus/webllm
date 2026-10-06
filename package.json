@@ -9,6 +9,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "signal": "node scripts/signal-server.mjs",
+    "demo": "node scripts/start-demo.mjs",
+    "verify:fed": "node scripts/verify-fed.mjs",
+    "verify:signal": "node scripts/verify-signal.mjs",
     "fetch:model": "node scripts/fetch-model.mjs"
   },
   "devDependencies": {

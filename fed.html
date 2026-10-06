@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0f16" />
+    <title>公共训练网络 · 联邦联训 Demo</title>
+    <style>
+      .site-nav {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        padding: 10px 14px;
+        background: #0b0f16;
+        border-bottom: 1px solid #1e2635;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .site-nav a { color: #8b98a9; text-decoration: none; }
+      .site-nav a:hover { color: #e6edf3; }
+      .site-nav a[aria-current="page"] { color: #e6edf3; font-weight: 600; }
+      .site-nav .sep { color: #2a3444; }
+    </style>
+  </head>
+  <body>
+    <nav class="site-nav">
+      <a href="/">单机训练台</a>
+      <span class="sep">/</span>
+      <a href="/fed.html" aria-current="page">联邦联训 Demo</a>
+    </nav>
+    <div id="app"></div>
+    <script type="module" src="/src/fed-main.ts"></script>
+  </body>
+</html>
