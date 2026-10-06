@@ -59,6 +59,16 @@ const ROUND_TIMEOUT_MS = 12000;
 const READY_WINDOW_MS = 10000;
 /** 连续漏报这么多轮后不再为它等待（重新就绪会自动恢复）。 */
 const MAX_MISSES = 3;
+/**
+ * 单轮本地训练的时间预算（毫秒）。
+ *
+ * 为什么必须有它：`trainBatch` 是一整段**同步**计算，一步算多久主线程就卡多久。
+ * PC 上 CPU 引擎「中」档一步 ≈ 67ms（实测），手机慢 3–10 倍 → 300–700ms，
+ * 一轮 20 步就是 6–14 秒页面完全无响应，浏览器直接判「页面无响应」。
+ * 有了预算，慢设备少跑几步、**如实上报样本数**（FedAvg 按实际样本数加权），
+ * 比把界面卡死好得多。
+ */
+const ROUND_BUDGET_MS = 2500;
 
 export interface ModelCard
 {
@@ -547,13 +557,27 @@ export class FedNode
 
     let loss = 0;
     let tokens = 0;
+    let steps = 0;
+    const roundStart = performance.now();
+
     for ( let s = 0; s < m.localSteps; s++ )
     {
       const r = await this.engine.trainBatch( this.trainIds, m.batchSize, m.lr );
       loss += r.loss;
       tokens += r.tokens;
+      steps += 1;
+
+      // **必须主动让出主线程**。trainBatch 是一整段同步计算 —— 纯 JS 引擎一步
+      // 可能要几十到几百毫秒，GPU 引擎也有回读等待。不让出的话，页面在这段时间里
+      // 完全无响应，用户看到的就是「点开始之后卡死了」。
+      await sleep( 0 );
+
+      // 时间预算：慢设备（手机）跑不动房主定义的步数时，少跑几步、如实上报样本数。
+      // 这不是偷工减料 —— FedAvg 按实际样本数加权，少跑的节点权重自然小；
+      // 比「把主线程卡死几分钟」好得多。
+      if ( performance.now() - roundStart >= ROUND_BUDGET_MS ) break;
     }
-    loss /= m.localSteps;
+    loss /= steps;
 
     const weights = await this.engine.getWeights();
     // 关掉交叉校验时不跑探针 —— 省掉每个节点每轮的一次额外评估（手机尤其有感）
@@ -561,13 +585,22 @@ export class FedNode
     const meta: WeightMeta = {
       round,
       peerId: this.selfId,
-      samples: m.localSteps * m.batchSize,
+      samples: steps * m.batchSize,
       tokens,
       localLoss: loss,
       probeLoss,
       deltaNorm: l2Distance( weights, base ),
       digest: weightsDigest( weights ),
     };
+
+    if ( steps < m.localSteps )
+    {
+      this.o.events.onLog(
+        `本机本轮跑了 ${ steps }/${ m.localSteps } 步（耗时 ${ ( performance.now() - roundStart ).toFixed( 0 ) } ms，` +
+        `预算 ${ ROUND_BUDGET_MS } ms）—— 设备较慢，为避免卡死界面而截断；样本数已如实上报`,
+      );
+    }
+
     return { weights, meta, base };
   }
 

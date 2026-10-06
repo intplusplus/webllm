@@ -280,7 +280,10 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   const cardTrain = el( 'section', 'fed-card' );
   const h5 = el( 'h2' ); h5.append( el( 'span', 'idx', '5' ), el( 'span', undefined, '房间设计' ) );
   cardTrain.append( h5 );
-  const designHint = el( 'p', 'hint', '由房主定义，开训时写进任务清单下发给所有节点。' );
+  const designHint = el( 'p', 'hint',
+    '由房主定义，开训时写进清单下发给所有节点。'
+    + '每台设备每轮最多花 2.5 秒做本地训练：跑不完就少跑几步、如实上报样本数（聚合按实际样本数加权），'
+    + '不会为追赶参数把界面卡死。' );
   cardTrain.append( designHint );
 
   const rowTask = el( 'div', 'fed-row' );
