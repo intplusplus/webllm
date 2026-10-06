@@ -43,6 +43,8 @@ import attentionGqaWgsl from '../gpu/kernels/attention_gqa.wgsl?raw';
 import siluMulWgsl from '../gpu/kernels/silu_mul.wgsl?raw';
 import embeddingF16Wgsl from '../gpu/kernels/embedding_f16.wgsl?raw';
 import gemmGemvF16Wgsl from '../gpu/kernels/gemm_gemv_f16.wgsl?raw';
+import gemmGemvSplitF16Wgsl from '../gpu/kernels/gemm_gemv_split_f16.wgsl?raw';
+import gemmGemvSplitReduceWgsl from '../gpu/kernels/gemm_gemv_split_reduce.wgsl?raw';
 
 export interface TestResult {
   name: string;
@@ -1291,6 +1293,190 @@ async function testGemmGemvF16(gpu: GpuContext): Promise<string> {
   ].join('；');
 }
 
+/**
+ * M5：split-K 解码 GEMV。
+ *
+ * gemm_gemv_f16 的并行度 = 输出列数 N：k/v_proj（N=128）只能排 1 个 workgroup、
+ * q/o/down（N=896）只有 4 个，Vega 的 8~11 个 CU 大部分在空转。
+ * split-K 把 K 维切成 S 段并行（grid=[ceil(N/256), S]），再用归约 kernel 合并，
+ * 用 S 倍的 workgroup 换回带宽利用率。
+ *
+ * 正确性覆盖：K=42/S=3（非 2 幂段数 + u32 主循环后的尾部）、K=896/S=8（真实
+ * k/v_proj 形状）、K=896/S=4（真实 q_proj 的另一档位），各带/不带 bias。
+ * 性能取 q_proj 形状（N=896, K=896，原 GEMV 只有 4 个 workgroup），
+ * 对比单列 GEMV 的每步耗时与等效带宽。
+ */
+async function testGemmGemvSplitF16(gpu: GpuContext): Promise<string> {
+  if (!gpu.features.has('shader-f16')) return 'shader-f16 不可用，跳过 split-K GEMV 验证';
+  const device = gpu.device;
+  const splitP = createComputePipeline(device, gemmGemvSplitF16Wgsl);
+  const reduceP = createComputePipeline(device, gemmGemvSplitReduceWgsl);
+  const gemvP = createComputePipeline(device, gemmGemvF16Wgsl);
+
+  const runSplit = async (
+    A: Float32Array,
+    B: Float32Array,
+    N: number,
+    K: number,
+    S: number,
+    hasBias: boolean,
+    bias?: Float32Array,
+  ): Promise<Float32Array> => {
+    const wgN = Math.ceil(N / 256);
+    const bufA = createStorageBuffer(device, A.length * 4);
+    const bufB = createStorageBuffer(device, B.length * 2);
+    const bufC = createStorageBuffer(device, N * 4);
+    const bufPartial = createStorageBuffer(device, S * N * 4);
+    const bufBias = createStorageBuffer(device, Math.max(N, 1) * 4);
+    writeF32(device, bufA, 0, A);
+    writeF16(device, bufB, 0, B);
+    if (bias) writeF32(device, bufBias, 0, bias);
+
+    const u = new StructPacker();
+    u.u32(N);
+    u.u32(K);
+    u.u32(S);
+    u.u32(hasBias ? 1 : 0);
+    const bufDims = createUniform(device, u.bytes());
+
+    const bgSplit = device.createBindGroup({
+      layout: splitP.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: bufA } },
+        { binding: 1, resource: { buffer: bufB } },
+        { binding: 2, resource: { buffer: bufPartial } },
+        { binding: 3, resource: { buffer: bufDims } },
+      ],
+    });
+    const bgReduce = device.createBindGroup({
+      layout: reduceP.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: bufPartial } },
+        { binding: 1, resource: { buffer: bufC } },
+        { binding: 2, resource: { buffer: bufBias } },
+        { binding: 3, resource: { buffer: bufDims } },
+      ],
+    });
+
+    dispatch(device, splitP, bgSplit, [wgN, S]);
+    dispatch(device, reduceP, bgReduce, wgN);
+    const out = await readbackF32(device, bufC, 0, N);
+    [bufA, bufB, bufC, bufPartial, bufBias, bufDims].forEach((b) => b.destroy());
+    return out;
+  };
+
+  // --- 1) 正确性：段数阶梯 + 尾部循环 + bias 有无 ---
+  const lines: string[] = [];
+  for (const { N, K, S } of [
+    { N: 53, K: 42, S: 3 },
+    { N: 128, K: 896, S: 8 },
+    { N: 64, K: 896, S: 4 },
+  ]) {
+    const rng = makeRng(0x5e10 + N * 31 + S);
+    const A = randomF32(K, rng);
+    const Bf = Float32Array.from(randomF32(N * K, rng), roundF16);
+    const bias = randomF32(N, rng);
+    const withBias = assertClose(
+      await runSplit(A, Bf, N, K, S, true, bias),
+      gemmNTRef(A, Bf, 1, N, K, bias),
+      1e-4,
+      `split(N=${N},K=${K},S=${S},bias)`,
+    );
+    const noBias = assertClose(
+      await runSplit(A, Bf, N, K, S, false),
+      gemmNTRef(A, Bf, 1, N, K),
+      1e-4,
+      `split(N=${N},K=${K},S=${S})`,
+    );
+    lines.push(`N=${N} K=${K} S=${S}: ${withBias} | ${noBias}`);
+  }
+
+  // --- 2) 性能：q_proj 形状，split 前后对比 ---
+  const N = 896;
+  const K = 896;
+  const S = 8;
+  const rng = makeRng(0x5e11);
+  const A = randomF32(K, rng);
+  const Bf = Float32Array.from(randomF32(N * K, rng), roundF16);
+  const wgN = Math.ceil(N / 256);
+  const iters = 30;
+  const bytes = N * K * 2 + K * 4 + N * 4; // split 额外的 partial 流量 ~57KB，占比 <4%，忽略
+
+  const bufA = createStorageBuffer(device, A.length * 4);
+  const bufB = createStorageBuffer(device, Bf.length * 2);
+  const bufC1 = createStorageBuffer(device, N * 4);
+  const bufC2 = createStorageBuffer(device, N * 4);
+  const bufPartial = createStorageBuffer(device, S * N * 4);
+  const bufBias = createStorageBuffer(device, N * 4);
+  writeF32(device, bufA, 0, A);
+  writeF16(device, bufB, 0, Bf);
+
+  const u1 = new StructPacker();
+  u1.u32(1);
+  u1.u32(N);
+  u1.u32(K);
+  u1.u32(0);
+  const bufDims1 = createUniform(device, u1.bytes());
+  const u2 = new StructPacker();
+  u2.u32(N);
+  u2.u32(K);
+  u2.u32(S);
+  u2.u32(0);
+  const bufDims2 = createUniform(device, u2.bytes());
+
+  const bgGemv = device.createBindGroup({
+    layout: gemvP.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: bufA } },
+      { binding: 1, resource: { buffer: bufB } },
+      { binding: 2, resource: { buffer: bufC1 } },
+      { binding: 3, resource: { buffer: bufBias } },
+      { binding: 4, resource: { buffer: bufDims1 } },
+    ],
+  });
+  const bgSplit = device.createBindGroup({
+    layout: splitP.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: bufA } },
+      { binding: 1, resource: { buffer: bufB } },
+      { binding: 2, resource: { buffer: bufPartial } },
+      { binding: 3, resource: { buffer: bufDims2 } },
+    ],
+  });
+  const bgReduce = device.createBindGroup({
+    layout: reduceP.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: bufPartial } },
+      { binding: 1, resource: { buffer: bufC2 } },
+      { binding: 2, resource: { buffer: bufBias } },
+      { binding: 3, resource: { buffer: bufDims2 } },
+    ],
+  });
+
+  const timeIters = async (step: () => void): Promise<number> => {
+    step();
+    await readbackF32(device, bufC1, 0, 1); // 预热 + 同步
+    const t0 = performance.now();
+    for (let i = 0; i < iters; i++) step();
+    await readbackF32(device, bufC1, 0, 1);
+    return (performance.now() - t0) / iters;
+  };
+
+  const plainMs = await timeIters(() => dispatch(device, gemvP, bgGemv, wgN));
+  const splitMs = await timeIters(() => {
+    dispatch(device, splitP, bgSplit, [wgN, S]);
+    dispatch(device, reduceP, bgReduce, wgN);
+  });
+
+  [bufA, bufB, bufC1, bufC2, bufPartial, bufBias, bufDims1, bufDims2].forEach((b) => b.destroy());
+
+  const bw = (ms: number) => `${(bytes / ms / 1e6).toFixed(1)} GB/s`;
+  return [
+    `正确性 M=1：${lines.join(' | ')}`,
+    `性能 N=${N} K=${K} iters=${iters}：单列 GEMV ${plainMs.toFixed(2)}ms/步（${bw(plainMs)}） | split-K S=${S} ${splitMs.toFixed(2)}ms/步（${bw(splitMs)}）→ ${(plainMs / splitMs).toFixed(1)}x`,
+  ].join('；');
+}
+
 export const kernelTests: SelfTest[] = [
   { name: 'vec_add（WGSL vs CPU）', run: testVecAdd },
   { name: 'gemm_nt（含 bias + 边界）', run: testGemm },
@@ -1318,4 +1504,5 @@ export const kernelTests: SelfTest[] = [
   { name: 'M4-3 silu_mul（SwiGLU 融合激活）', run: testSiluMul },
   { name: 'M4-3 embedding_f16（f16 词嵌入查表）', run: testEmbeddingF16 },
   { name: 'M5 gemm_gemv_f16（解码 M=1 专用 + 对比通用 GEMM）', run: testGemmGemvF16 },
+  { name: 'M5 gemm_gemv_split_f16（split-K 解码 + 归约对拍）', run: testGemmGemvSplitF16 },
 ];

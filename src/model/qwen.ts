@@ -20,6 +20,8 @@ import vecAddWgsl from '../gpu/kernels/vec_add.wgsl?raw';
 import rmsnormWgsl from '../gpu/kernels/rmsnorm.wgsl?raw';
 import gemmNtF16FromF32Wgsl from '../gpu/kernels/gemm_nt_f16_from_f32.wgsl?raw';
 import gemmGemvF16Wgsl from '../gpu/kernels/gemm_gemv_f16.wgsl?raw';
+import gemmGemvSplitF16Wgsl from '../gpu/kernels/gemm_gemv_split_f16.wgsl?raw';
+import gemmGemvSplitReduceWgsl from '../gpu/kernels/gemm_gemv_split_reduce.wgsl?raw';
 import ropeHalfWgsl from '../gpu/kernels/rope_half.wgsl?raw';
 import attentionGqaWgsl from '../gpu/kernels/attention_gqa.wgsl?raw';
 import attentionGqaCacheWgsl from '../gpu/kernels/attention_gqa_cache.wgsl?raw';
@@ -28,6 +30,44 @@ import siluMulWgsl from '../gpu/kernels/silu_mul.wgsl?raw';
 
 /** 必须与 attention_gqa.wgsl 中的 MAX_T 一致。 */
 const MAX_T = 512;
+
+/**
+ * split-K 的调度目标：一次投影至少要排满约 24 个 workgroup（Vega 8~11 CU 的
+ * 2~3 倍覆盖，留出延迟隐藏空间）才不浪费算力。低于该值就把 K 维切段并行。
+ */
+const GEMV_SPLIT_TARGET_WG = 24;
+/** K 段数上限：段太短会放大归约与调度开销，8 已足够填满核显。 */
+const GEMV_SPLIT_MAX = 8;
+
+/**
+ * 选 split-K 的段数 S ∈ {2,4,8}（返回 1 表示不切）。
+ *
+ * 原则：在满足 K % S == 0 且 (K/S) % 2 == 0（u32 边界）的前提下，
+ * 取能让 workgroup 总数达到 GEMV_SPLIT_TARGET_WG 的最小 S；
+ * 若所有档位都达不到（N 特别小，如 k/v_proj 只有 1 个 workgroup），
+ * 取最大的可用 S——并行度仍是纯收益。
+ *
+ * 真实模型的调度结果：
+ *   k/v_proj (N=128, 1 wg)  → S=8 → 8 wg
+ *   q/o_proj (N=896, 4 wg)  → S=8 → 32 wg
+ *   down_proj (N=896, 4 wg) → S=8 → 32 wg
+ *   gate/up (N=4864, 19 wg) → S=2 → 38 wg
+ *   lm_head (N=151936, 594 wg) → 不切（并行度已足够）
+ */
+function planGemvSplit ( wgN: number, K: number ): number
+{
+    if ( wgN >= GEMV_SPLIT_TARGET_WG ) return 1;
+    let s = 1;
+    for ( const cand of [ 2, 4, GEMV_SPLIT_MAX ] )
+    {
+        if ( K % cand === 0 && ( K / cand ) % 2 === 0 )
+        {
+            s = cand;
+            if ( wgN * cand >= GEMV_SPLIT_TARGET_WG ) break;
+        }
+    }
+    return s;
+}
 
 /**
  * Qwen2 的权重集合（CPU 侧 fp32，供参考实现与上传共用）。
@@ -102,6 +142,8 @@ export class QwenGpt
     private readonly pNorm: GPUComputePipeline;
     private readonly pGemmF16: GPUComputePipeline;
     private readonly pGemmGemv: GPUComputePipeline;
+    private readonly pGemvSplit: GPUComputePipeline;
+    private readonly pGemvReduce: GPUComputePipeline;
     private readonly pRope: GPUComputePipeline;
     private readonly pAttn: GPUComputePipeline;
     private readonly pAttnCache: GPUComputePipeline;
@@ -135,6 +177,8 @@ export class QwenGpt
         this.pNorm = createComputePipeline( device, rmsnormWgsl, 'main', 'rmsnorm' );
         this.pGemmF16 = createComputePipeline( device, gemmNtF16FromF32Wgsl, 'main', 'gemm_nt_f16_from_f32' );
         this.pGemmGemv = createComputePipeline( device, gemmGemvF16Wgsl, 'main', 'gemm_gemv_f16' );
+        this.pGemvSplit = createComputePipeline( device, gemmGemvSplitF16Wgsl, 'main', 'gemm_gemv_split_f16' );
+        this.pGemvReduce = createComputePipeline( device, gemmGemvSplitReduceWgsl, 'main', 'gemm_gemv_split_reduce' );
         this.pRope = createComputePipeline( device, ropeHalfWgsl, 'main', 'rope_half' );
         this.pAttn = createComputePipeline( device, attentionGqaWgsl, 'main', 'attention_gqa' );
         this.pAttnCache = createComputePipeline( device, attentionGqaCacheWgsl, 'main', 'attention_gqa_cache' );
@@ -445,6 +489,8 @@ export class QwenGpt
      * C = A @ W^T (+ bias)，A/C 为 f32、W 为 f16。
      * M == 1（解码）时走 GEMV kernel，避免通用 GEMM 沿 M 分块造成的填充浪费；
      * 该 kernel 把权重按 u32（2 个 f16）读取，要求 K 为偶数，否则退回通用 GEMM。
+     * 解码投影的 workgroup 数不足时（如 k/v_proj 只有 1 个）再按 K 维 split-K 并行，
+     * 由 gemm_gemv_split_reduce 归约部分和。
      */
     private gemm ( A: Tensor, weight: string, C: Tensor, bias: string | null, M: number, N: number, K: number ): void
     {
@@ -455,10 +501,32 @@ export class QwenGpt
 
         if ( M === 1 && K % 2 === 0 )
         {
+            const wgN = Math.ceil( N / 256 );
+            const split = planGemvSplit( wgN, K );
+            if ( split > 1 )
+            {
+                // split-K：S 段并行算部分和 → reduce 归约（bias 只在归约端加一次）。
+                // partial 由 Arena 分配，两次 dispatch 之间按提交顺序复用，天然安全。
+                const partial = this.arena.allocFloat32( split * N, [ split, N ] );
+                const us = this.uniform( `gemvsplit:${ N }:${ K }:${ split }:${ hasBias ? 1 : 0 }`, ( p ) =>
+                    p.u32( N ).u32( K ).u32( split ).u32( hasBias ? 1 : 0 ) );
+                this.run(
+                    this.pGemvSplit,
+                    [ tensorResource( A ), this.wf16( weight ), tensorResource( partial ), us ],
+                    [ wgN, split ],
+                );
+                this.run(
+                    this.pGemvReduce,
+                    [ tensorResource( partial ), tensorResource( C ), biasBuffer, us ],
+                    wgN,
+                );
+                return;
+            }
+
             this.run(
                 this.pGemmGemv,
                 [ tensorResource( A ), this.wf16( weight ), tensorResource( C ), biasBuffer, u ],
-                Math.ceil( N / 256 ),
+                wgN,
             );
             return;
         }

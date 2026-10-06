@@ -38,7 +38,7 @@ WebGPU 支持的浏览器（Chrome / Edge 113+）。开发环境实测基线见 
 
 ```
 src/
-├── gpu/          # device / arena / buffer / pipeline + kernels/*.wgsl（33 个自研算子）
+├── gpu/          # device / arena / buffer / pipeline + kernels/*.wgsl（35 个自研算子）
 ├── model/        # tiny-gpt 前反向图、权重初始化、Qwen 架构
 ├── train/        # 训练循环、AdamW、语料 batch
 ├── infer/        # 生成循环 + KV cache、temperature/top-k/top-p采样
@@ -70,7 +70,8 @@ src/
 ## 里程碑
 
 M0 基建 → M1 前向算子 → M2 训练闭环 → M3 性能优化 → M4 加载 Qwen → M5 完善。
-当前已完成 M0–M4，各阶段验证方式见 [docs/实施计划.md](docs/实施计划.md)。
+M0–M4 已完成；M5 进行中：KV cache、解码专用 GEMV（7.5x）、split-K GEMV（提高小 N
+投影的 CU 占用率）已落地，各阶段验证方式见 [docs/实施计划.md](docs/实施计划.md)。
 
 ## License
 
