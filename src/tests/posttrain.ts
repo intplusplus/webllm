@@ -1,9 +1,10 @@
-import type { GpuContext } from '../gpu/device';
+﻿import type { GpuContext } from '../gpu/device';
 import { initWeights } from '../model/init';
 import { TinyGpt } from '../model/tiny-gpt';
 import type { GPTConfig } from '../model/config';
 import { Trainer } from '../train/trainer';
-import { encodeSft, makeSftSamples, makeDpoPairs, SFT_VOCAB, type SftSample } from '../train/sft-data';
+import { makeSftSamples, makeDpoPairs, SFT_VOCAB, type SftSample } from '../train/sft-data';
+import { buildBatch, greedyCompletion } from '../train/sft';
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from '../store/checkpoint';
 
 /**
@@ -25,90 +26,6 @@ const SFT_CONFIG: GPTConfig = {
   nEmbd: 64,
   bias: true,
 };
-
-interface Batch
-{
-  tokens: Uint32Array;
-  targets: Uint32Array;
-  weights: Float32Array;
-  B: number;
-  T: number;
-  /** 每条序列的 completion 长度（logp 归一与 DPO 权重用） */
-  completionLens: number[];
-  prompts: string[];
-}
-
-/** 把一组样本拼成定长批次；prompt 位置 w=0（不计 loss），completion 位置 w=1。 */
-function buildBatch ( samples: SftSample[], padId: number ): Batch
-{
-  const fulls = samples.map( ( s ) => s.prompt + s.completion );
-  const T = Math.max( ...fulls.map( ( s ) => s.length ) );
-  const B = samples.length;
-  const tokens = new Uint32Array( B * T );
-  const targets = new Uint32Array( B * T );
-  const weights = new Float32Array( B * T );
-  const completionLens: number[] = [];
-  const prompts: string[] = [];
-
-  for ( let b = 0; b < B; b++ )
-  {
-    const s = samples[ b ];
-    const ids = [ ...encodeSft( s.prompt + s.completion ) ];
-    const promptLen = s.prompt.length;
-    const len = ids.length;
-    completionLens.push( len - promptLen );
-    prompts.push( s.prompt );
-    for ( let t = 0; t < T; t++ )
-    {
-      const base = b * T + t;
-      if ( t < len )
-      {
-        tokens[ base ] = ids[ t ];
-        // 位置 t 预测 full[t+1]：只有当目标是 completion 的一部分时才计 loss
-        if ( t + 1 < len && t + 1 >= promptLen )
-        {
-          targets[ base ] = ids[ t + 1 ];
-          weights[ base ] = 1;
-        }
-        else
-        {
-          targets[ base ] = 0;
-          weights[ base ] = 0;
-        }
-      }
-      else
-      {
-        tokens[ base ] = padId;
-        targets[ base ] = 0;
-        weights[ base ] = 0;
-      }
-    }
-  }
-  return { tokens, targets, weights, B, T, completionLens, prompts };
-}
-
-/** 贪心生成 completion（到换行为止），返回不含换行的文本。 */
-async function greedyCompletion ( trainer: Trainer, prompt: string, maxNew: number ): Promise<string>
-{
-  const V = SFT_CONFIG.vocabSize;
-  const ids = [ ...encodeSft( prompt ) ];
-  let out = '';
-  for ( let i = 0; i < maxNew; i++ )
-  {
-    const T = Math.min( ids.length, SFT_CONFIG.blockSize );
-    const window = Uint32Array.from( ids.slice( ids.length - T ) );
-    trainer.forward( window, 1, T );
-    const logits = await trainer.readLogits();
-    const last = logits.slice( ( T - 1 ) * V, T * V );
-    let best = 0;
-    for ( let v = 1; v < V; v++ ) if ( last[ v ] > last[ best ] ) best = v;
-    const ch = SFT_VOCAB[ best ];
-    if ( ch === '\n' ) break;
-    out += ch;
-    ids.push( best );
-  }
-  return out;
-}
 
 /** 序列的 completion 部分 token logprob 之和（CPU 侧，weights/mask 由调用方给定）。 */
 function rowLogprobSum ( logits: Float32Array, V: number, row: number, targets: Uint32Array, mask: Float32Array, T: number ): number
@@ -162,14 +79,14 @@ export async function testSft ( gpu: GpuContext ): Promise<string>
   const fails: string[] = [];
   for ( const s of checkSet )
   {
-    const got = await greedyCompletion( trainer, s.prompt, 8 );
+    const got = await greedyCompletion( trainer, s.prompt, 8, SFT_VOCAB, SFT_CONFIG.blockSize );
     if ( got === s.completion.replace( '\n', '' ) ) correct++;
     else fails.push( `${ s.prompt } → ${ JSON.stringify( got ) }（期望 ${ JSON.stringify( s.completion.replace( '\n', '' ) ) }）` );
   }
   let heldCorrect = 0;
   for ( const s of heldOut )
   {
-    const got = await greedyCompletion( trainer, s.prompt, 8 );
+    const got = await greedyCompletion( trainer, s.prompt, 8, SFT_VOCAB, SFT_CONFIG.blockSize );
     if ( got === s.completion.replace( '\n', '' ) ) heldCorrect++;
   }
 
@@ -362,7 +279,7 @@ export async function testDpo ( gpu: GpuContext ): Promise<string>
   let correct = 0;
   for ( const s of check )
   {
-    const got = await greedyCompletion( trainer, s.prompt, 8 );
+    const got = await greedyCompletion( trainer, s.prompt, 8, SFT_VOCAB, SFT_CONFIG.blockSize );
     if ( got === s.completion.replace( '\n', '' ) ) correct++;
   }
   if ( correct < 3 ) throw new Error( `DPO 后生成能力崩坏：仅 ${ correct }/4 正确` );

@@ -50,6 +50,8 @@ export interface CheckpointPayload
   step: number;
   params: Record<string, Float32Array>;
   optimizer: Record<string, { m: Float32Array; v: Float32Array }>;
+  /** 可选的保存阶段标签（训练台用） */
+  tag?: string;
 }
 
 export async function saveCheckpoint ( key: string, payload: CheckpointPayload ): Promise<void>
