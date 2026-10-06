@@ -12,7 +12,7 @@ import {
     writeU32,
     type Tensor,
 } from '../gpu/buffer';
-import { createComputePipeline, dispatch } from '../gpu/pipeline';
+import { CommandBatch, createComputePipeline, dispatch } from '../gpu/pipeline';
 import { qwenHeadDim, qwenKvDim, type QwenConfig } from './qwen-config';
 
 import embeddingF16Wgsl from '../gpu/kernels/embedding_f16.wgsl?raw';
@@ -149,6 +149,12 @@ export class QwenGpt
     private readonly pAttnCache: GPUComputePipeline;
     private readonly pKvStore: GPUComputePipeline;
     private readonly pSiluMul: GPUComputePipeline;
+
+    /**
+     * 激活中的 batch（runForward 期间非空）：所有 kernel dispatch 进同一个
+     * encoder，pass 边界表达读写依赖，最后只 submit 一次。
+     */
+    private batch: CommandBatch | null = null;
 
     constructor ( gpu: GpuContext, config: QwenConfig, maxBatch = 1 )
     {
@@ -367,90 +373,122 @@ export class QwenGpt
         const nMC = Math.ceil( ( M * C ) / 64 );
         const nKvStore = Math.ceil( ( M * HI ) / 64 );
 
-        // --- 嵌入（无位置嵌入，位置信息由 RoPE 注入） ---
-        let x = this.arena.allocFloat32( M * C, [ M, C ] );
-        this.run( this.pEmbed, [ this.wf16( 'embed' ), this.inputTokens, tensorResource( x ), uEmbed ], Math.ceil( ( M * C ) / 64 ) );
-
-        const nRopeQ = Math.ceil( ( M * H * ( D / 2 ) ) / 64 );
-        const nRopeK = Math.ceil( ( M * cfg.nKvHead * ( D / 2 ) ) / 64 );
-
-        for ( let i = 0; i < cfg.nLayer; i++ )
+        // 全部 kernel 装进同一个 command encoder、只 submit 一次（省掉每 dispatch
+        // ~110µs 的 CPU 提交开销）；pass 边界即读写依赖屏障，划分原则：
+        // 同一 pass 内的 dispatch 之间不得存在对同一 buffer 的 RAW / WAR / WAW。
+        // 每层 12 个 pass / 17 次 dispatch（cache 路径），24 层 + 头尾 ≈ 291 pass。
+        this.batch = new CommandBatch( this.device );
+        try
         {
-            const p = `L${ i }`;
+            // --- 嵌入（无位置嵌入，位置信息由 RoPE 注入） ---
+            let x = this.arena.allocFloat32( M * C, [ M, C ] );
+            this.run( this.pEmbed, [ this.wf16( 'embed' ), this.inputTokens, tensorResource( x ), uEmbed ], Math.ceil( ( M * C ) / 64 ) );
+            this.passBreak(); // x 写 → 各层 norm 读
 
-            // --- attention 子层 ---
-            const n1 = this.arena.allocFloat32( M * C, [ M, C ] );
-            this.run( this.pNorm, [ tensorResource( x ), this.f32( `${ p }.inNorm` ), tensorResource( n1 ), uNorm ], M );
+            const nRopeQ = Math.ceil( ( M * H * ( D / 2 ) ) / 64 );
+            const nRopeK = Math.ceil( ( M * cfg.nKvHead * ( D / 2 ) ) / 64 );
 
-            const q = this.arena.allocFloat32( M * C, [ M, C ] );
-            const k = this.arena.allocFloat32( M * HI, [ M, HI ] );
-            const v = this.arena.allocFloat32( M * HI, [ M, HI ] );
-            this.gemm( n1, `${ p }.qW`, q, `${ p }.qB`, M, C, C );
-            this.gemm( n1, `${ p }.kW`, k, `${ p }.kB`, M, HI, C );
-            this.gemm( n1, `${ p }.vW`, v, `${ p }.vB`, M, HI, C );
-
-            const qr = this.arena.allocFloat32( M * C, [ M, C ] );
-            const kr = this.arena.allocFloat32( M * HI, [ M, HI ] );
-            this.run( this.pRope, [ tensorResource( q ), tensorResource( qr ), uRopeQ ], nRopeQ );
-            this.run( this.pRope, [ tensorResource( k ), tensorResource( kr ), uRopeK ], nRopeK );
-
-            const att = this.arena.allocFloat32( M * C, [ M, C ] );
-            if ( useCache )
+            for ( let i = 0; i < cfg.nLayer; i++ )
             {
-                // RoPE 后写入 cache，再让注意力读整段 cache
-                this.run( this.pKvStore, [ tensorResource( kr ), { buffer: this.kCache[ i ], size: this.kCache[ i ].size }, uKvStore ], nKvStore );
-                this.run( this.pKvStore, [ tensorResource( v ), { buffer: this.vCache[ i ], size: this.vCache[ i ].size }, uKvStore ], nKvStore );
-                this.run(
-                    this.pAttnCache,
-                    [
-                        tensorResource( qr ),
-                        { buffer: this.kCache[ i ], size: this.kCache[ i ].size },
-                        { buffer: this.vCache[ i ], size: this.vCache[ i ].size },
-                        tensorResource( att ),
-                        uAttnCache,
-                    ],
-                    [ M, H ],
-                );
+                const p = `L${ i }`;
+
+                // --- attention 子层 ---
+                const n1 = this.arena.allocFloat32( M * C, [ M, C ] );
+                this.run( this.pNorm, [ tensorResource( x ), this.f32( `${ p }.inNorm` ), tensorResource( n1 ), uNorm ], M );
+                this.passBreak(); // n1 写 → q/k/v 读
+
+                // q/k/v 都只读 n1、写各自的输出，可同 pass 并行
+                const q = this.arena.allocFloat32( M * C, [ M, C ] );
+                const k = this.arena.allocFloat32( M * HI, [ M, HI ] );
+                const v = this.arena.allocFloat32( M * HI, [ M, HI ] );
+                this.gemm( n1, `${ p }.qW`, q, `${ p }.qB`, M, C, C );
+                this.gemm( n1, `${ p }.kW`, k, `${ p }.kB`, M, HI, C );
+                this.gemm( n1, `${ p }.vW`, v, `${ p }.vB`, M, HI, C );
+                this.passBreak(); // q/k 写 → rope 读
+
+                // q→qr 与 k→kr 无相互依赖，同 pass
+                const qr = this.arena.allocFloat32( M * C, [ M, C ] );
+                const kr = this.arena.allocFloat32( M * HI, [ M, HI ] );
+                this.run( this.pRope, [ tensorResource( q ), tensorResource( qr ), uRopeQ ], nRopeQ );
+                this.run( this.pRope, [ tensorResource( k ), tensorResource( kr ), uRopeK ], nRopeK );
+                this.passBreak(); // kr 写 → cache 读
+
+                const att = this.arena.allocFloat32( M * C, [ M, C ] );
+                if ( useCache )
+                {
+                    // RoPE 后写入 cache，再让注意力读整段 cache（cache 写 → attn 读必须隔 pass）
+                    this.run( this.pKvStore, [ tensorResource( kr ), { buffer: this.kCache[ i ], size: this.kCache[ i ].size }, uKvStore ], nKvStore );
+                    this.run( this.pKvStore, [ tensorResource( v ), { buffer: this.vCache[ i ], size: this.vCache[ i ].size }, uKvStore ], nKvStore );
+                    this.passBreak();
+                    this.run(
+                        this.pAttnCache,
+                        [
+                            tensorResource( qr ),
+                            { buffer: this.kCache[ i ], size: this.kCache[ i ].size },
+                            { buffer: this.vCache[ i ], size: this.vCache[ i ].size },
+                            tensorResource( att ),
+                            uAttnCache,
+                        ],
+                        [ M, H ],
+                    );
+                    this.passBreak(); // att 写 → o 读
+                }
+                else
+                {
+                    this.run( this.pAttn, [ tensorResource( qr ), tensorResource( kr ), tensorResource( v ), tensorResource( att ), uAttn ], [ T, H, B ] );
+                    this.passBreak();
+                }
+
+                const proj = this.arena.allocFloat32( M * C, [ M, C ] );
+                this.gemm( att, `${ p }.oW`, proj, null, M, C, C );
+                this.passBreak(); // proj 写 → add 读
+
+                const xa = this.arena.allocFloat32( M * C, [ M, C ] );
+                this.run( this.pAdd, [ tensorResource( x ), tensorResource( proj ), tensorResource( xa ) ], nMC );
+                this.passBreak(); // xa 写 → norm2 读
+
+                // --- MLP 子层（SwiGLU） ---
+                const n2 = this.arena.allocFloat32( M * C, [ M, C ] );
+                this.run( this.pNorm, [ tensorResource( xa ), this.f32( `${ p }.postNorm` ), tensorResource( n2 ), uNorm ], M );
+                this.passBreak(); // n2 写 → gate/up 读
+
+                const gate = this.arena.allocFloat32( M * I, [ M, I ] );
+                const up = this.arena.allocFloat32( M * I, [ M, I ] );
+                this.gemm( n2, `${ p }.gateW`, gate, null, M, I, C );
+                this.gemm( n2, `${ p }.upW`, up, null, M, I, C );
+                this.passBreak(); // gate/up 写 → silu 读
+
+                const act = this.arena.allocFloat32( M * I, [ M, I ] );
+                this.run( this.pSiluMul, [ tensorResource( gate ), tensorResource( up ), tensorResource( act ), uSilu ], Math.ceil( ( M * I ) / 64 ) );
+                this.passBreak(); // act 写 → down 读
+
+                const d = this.arena.allocFloat32( M * C, [ M, C ] );
+                this.gemm( act, `${ p }.downW`, d, null, M, C, I );
+                this.passBreak(); // d 写 → add2 读
+
+                const xb = this.arena.allocFloat32( M * C, [ M, C ] );
+                this.run( this.pAdd, [ tensorResource( xa ), tensorResource( d ), tensorResource( xb ) ], nMC );
+                this.passBreak(); // xb 写 → 下一层 norm 读
+
+                x = xb;
+                this.layerOutputs.push( xb );
             }
-            else
-            {
-                this.run( this.pAttn, [ tensorResource( qr ), tensorResource( kr ), tensorResource( v ), tensorResource( att ), uAttn ], [ T, H, B ] );
-            }
 
-            const proj = this.arena.allocFloat32( M * C, [ M, C ] );
-            this.gemm( att, `${ p }.oW`, proj, null, M, C, C );
+            const lnf = this.arena.allocFloat32( M * C, [ M, C ] );
+            this.run( this.pNorm, [ tensorResource( x ), this.f32( 'finalNorm' ), tensorResource( lnf ), uNorm ], M );
+            this.passBreak(); // lnf 写 → lm_head 读
 
-            const xa = this.arena.allocFloat32( M * C, [ M, C ] );
-            this.run( this.pAdd, [ tensorResource( x ), tensorResource( proj ), tensorResource( xa ) ], nMC );
-
-            // --- MLP 子层（SwiGLU） ---
-            const n2 = this.arena.allocFloat32( M * C, [ M, C ] );
-            this.run( this.pNorm, [ tensorResource( xa ), this.f32( `${ p }.postNorm` ), tensorResource( n2 ), uNorm ], M );
-
-            const gate = this.arena.allocFloat32( M * I, [ M, I ] );
-            const up = this.arena.allocFloat32( M * I, [ M, I ] );
-            this.gemm( n2, `${ p }.gateW`, gate, null, M, I, C );
-            this.gemm( n2, `${ p }.upW`, up, null, M, I, C );
-
-            const act = this.arena.allocFloat32( M * I, [ M, I ] );
-            this.run( this.pSiluMul, [ tensorResource( gate ), tensorResource( up ), tensorResource( act ), uSilu ], Math.ceil( ( M * I ) / 64 ) );
-
-            const d = this.arena.allocFloat32( M * C, [ M, C ] );
-            this.gemm( act, `${ p }.downW`, d, null, M, C, I );
-
-            const xb = this.arena.allocFloat32( M * C, [ M, C ] );
-            this.run( this.pAdd, [ tensorResource( xa ), tensorResource( d ), tensorResource( xb ) ], nMC );
-            x = xb;
-            this.layerOutputs.push( xb );
+            const logits = this.arena.allocFloat32( M * V, [ M, V ] );
+            this.gemm( lnf, 'embed', logits, null, M, V, C );
+            if ( useCache ) this.cacheLen = pastLen + M;
+            return logits;
         }
-
-        const lnf = this.arena.allocFloat32( M * C, [ M, C ] );
-        this.run( this.pNorm, [ tensorResource( x ), this.f32( 'finalNorm' ), tensorResource( lnf ), uNorm ], M );
-
-        const logits = this.arena.allocFloat32( M * V, [ M, V ] );
-        this.gemm( lnf, 'embed', logits, null, M, V, C );
-        if ( useCache ) this.cacheLen = pastLen + M;
-        return logits;
+        finally
+        {
+            const batch = this.batch;
+            this.batch = null;
+            batch.submit();
+        }
     }
 
     async readTensor ( t: Tensor ): Promise<Float32Array>
@@ -482,7 +520,22 @@ export class QwenGpt
     {
         const entries: GPUBindGroupEntry[] = resources.map( ( resource, binding ) => ( { binding, resource } ) );
         const bindGroup = this.device.createBindGroup( { layout: pipeline.getBindGroupLayout( 0 ), entries } );
+        if ( this.batch )
+        {
+            this.batch.dispatch( pipeline, bindGroup, workgroups );
+            return;
+        }
         dispatch( this.device, pipeline, bindGroup, workgroups );
+    }
+
+    /**
+     * pass 边界（隐式内存屏障）：之前 pass 的写入对之后的 dispatch 可见。
+     * 同一 pass 内的 dispatch 之间对同一 buffer 的读写冲突行为未定义，
+     * 因此每个「写 → 读」依赖处都必须调用。
+     */
+    private passBreak (): void
+    {
+        this.batch?.endPass();
     }
 
     /**
