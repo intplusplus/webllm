@@ -70,8 +70,10 @@ src/
 ## 里程碑
 
 M0 基建 → M1 前向算子 → M2 训练闭环 → M3 性能优化 → M4 加载 Qwen → M5 完善。
-M0–M4 已完成；M5 进行中：KV cache、解码专用 GEMV（7.5x）、split-K GEMV（提高小 N
-投影的 CU 占用率）已落地，各阶段验证方式见 [docs/实施计划.md](docs/实施计划.md)。
+M0–M4 已完成；M5 进行中（KV cache / 解码 GEMV / split-K / dispatch 合并），
+解码吞吐从 1.2 → 10+ tokens/s，优化的完整实测数据与结论见
+[docs/性能实测记录.md](docs/性能实测记录.md)，各阶段验证方式见
+[docs/实施计划.md](docs/实施计划.md)。
 
 ## License
 
