@@ -1,24 +1,24 @@
-# 依赖与构建产物
+# 依赖与构建产�?
 node_modules/
 dist/
 *.tsbuildinfo
 
-# 模型权重：438MB，不入版本库，用 `npm run fetch:model` 下载
-# 见 scripts/fetch-model.mjs
+# 模型权重�?438MB，不入版本库，用 `npm run fetch:model` 下载
+# �? scripts/fetch-model.mjs
 public/models/**/*.safetensors
 public/models/**/*.bin
 public/models/**/*.gguf
 
-# tokenizer 的遗留文件：bpe.ts 只读 tokenizer.json，这两个是 HF 旧格式冗余副本
+# tokenizer 的遗留文件：bpe.ts 只读 tokenizer.json，这两个�? HF 旧格式冗余副�?
 public/models/**/vocab.json
 public/models/**/merges.txt
 
-# IDE / 编辑器私有目录
+# IDE / 编辑器私有目�?
 .trae/
 .vscode/
 .idea/
 
-# 本地环境与日志
+# 本地环境与日�?
 .env
 .env.local
 *.local
@@ -32,3 +32,6 @@ Thumbs.db
 .vite/
 # WorkBuddy �Ự�������ݣ�����⣩
 .workbuddy/
+
+# ������԰������ļ� demo��`npm run build:standalone` �������ɣ�������⣩
+demo/

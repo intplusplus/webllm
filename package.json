@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "signal": "node scripts/signal-server.mjs",
     "demo": "node scripts/start-demo.mjs",
+    "build:standalone": "node scripts/build-standalone.mjs",
     "verify:fed": "node scripts/verify-fed.mjs",
     "verify:e2e": "node scripts/verify-e2e.mjs",
     "verify:signal": "node scripts/verify-signal.mjs",

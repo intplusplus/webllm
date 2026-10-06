@@ -91,10 +91,15 @@ Peer  Peer  Peer   各自在本地数据分片上训练，只上报权重
 
 ```bash
 npm run demo            # 一键起信令 + dev server，并打印手机可用地址
+npm run build:standalone # 打包成单个 HTML（双击即开、离线可用、零服务器）→ demo/fed-standalone.html
 npm run verify:fed      # 联邦训练核心自检（16 项）
 npm run verify:e2e      # 端到端测试（16 项，3 节点房间里 1 个故意作弊）
 npm run verify:signal   # 信令链路自检（7 项，含跨 64KB 长帧）
 ```
+
+界面也支持用 URL 参数预置一份房间配置，方便分享与复现，例如
+`fed.html?quick=1&room=myroom&mode=local`（`quick=1` 用小配置快速跑通，
+`mode=local` 走免服务器的本机通道）。
 
 自检关键结论（真实语料 Tiny Shakespeare，1,115,394 字符）：
 

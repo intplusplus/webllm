@@ -70,10 +70,16 @@ function detectDevice (): DevCap
 
 function defaultSignalUrl (): string
 {
-  const q = new URLSearchParams( location.search ).get( 'signal' );
+  const q = qp( 'signal' );
   if ( q ) return q;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${ proto }//${ location.hostname || '127.0.0.1' }:5180`;
+}
+
+/** 读取 URL 查询参数 —— 用于分享/复现一份房间配置，也让界面可被自动化测试。 */
+function qp ( name: string ): string | null
+{
+  return new URLSearchParams( location.search ).get( name );
 }
 
 // ------------------------------------------------------------------ 主界面
@@ -108,7 +114,7 @@ export function renderFedApp ( root: HTMLElement ): void
   const rowRoom = el( 'div', 'fed-row' );
   rowRoom.append( el( 'label', undefined, '房间 ID' ) );
   const inRoom = el( 'input', 'fed-input' ) as HTMLInputElement;
-  inRoom.value = 'wifi-lab';
+  inRoom.value = qp( 'room' ) ?? 'wifi-lab';
   rowRoom.append( inRoom );
   cardConnect.append( rowRoom );
 
@@ -125,7 +131,7 @@ export function renderFedApp ( root: HTMLElement ): void
     opt.textContent = text;
     inMode.append( opt );
   }
-  inMode.value = 'webrtc';
+  inMode.value = qp( 'mode' ) === 'local' ? 'local' : 'webrtc';
   rowMode.append( inMode );
   cardConnect.append( rowMode );
 
@@ -201,11 +207,13 @@ export function renderFedApp ( root: HTMLElement ): void
   cardTrain.append( h5 );
 
   const rowParams = el( 'div', 'fed-row' );
-  const inRounds = numInput( '轮次', '30' );
-  const inSteps = numInput( '每轮步数', '20' );
-  const inBatch = numInput( '批大小', '32' );
-  const inLr = numInput( '学习率', '0.02' );
-  const inShards = numInput( '分片数', '4' );
+  // ?quick=1 给出一个跑得快的小配置（演示/自动化测试用）
+  const quick = qp( 'quick' ) !== null;
+  const inRounds = numInput( '轮次', qp( 'rounds' ) ?? ( quick ? '6' : '30' ) );
+  const inSteps = numInput( '每轮步数', qp( 'steps' ) ?? ( quick ? '8' : '20' ) );
+  const inBatch = numInput( '批大小', qp( 'batch' ) ?? ( quick ? '16' : '32' ) );
+  const inLr = numInput( '学习率', qp( 'lr' ) ?? '0.02' );
+  const inShards = numInput( '分片数', qp( 'shards' ) ?? '4' );
   for ( const [ label, input ] of [ inRounds, inSteps, inBatch, inLr, inShards ] )
   {
     const wrap = el( 'div', 'fed-row' );

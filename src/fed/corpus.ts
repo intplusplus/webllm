@@ -34,6 +34,14 @@ export function buildStoi ( vocab: string[] ): Map<string, number>
 /** 加载内置语料（Karpathy Tiny Shakespeare，镜像在 public/data）。 */
 export async function loadBuiltinCorpus (): Promise<Corpus>
 {
+  // 单文件 demo（file:// 直接打开）没有静态服务可 fetch，改由构建脚本把语料内联进页面。
+  // 这是唯一为「离线单文件」开的钩子，正常部署路径走下面的 fetch。
+  const inline = ( globalThis as { __WEBLLM_INLINE_CORPUS__?: string } ).__WEBLLM_INLINE_CORPUS__;
+  if ( typeof inline === 'string' && inline.length > 1e5 )
+  {
+    return { name: 'Tiny Shakespeare（内联）', text: inline, vocab: vocabOf( inline ) };
+  }
+
   const res = await fetch( BUILTIN_URL );
   if ( !res.ok ) throw new Error( `加载内置语料失败：HTTP ${ res.status } ${ BUILTIN_URL }` );
   const text = await res.text();
