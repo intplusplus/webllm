@@ -356,6 +356,13 @@ export class FedNode
         this.notReady.set( msg.peerId, msg.reason ?? '节点自报无法构建模型' );
         this.readyPeers.delete( msg.peerId );
         this.o.events.onLog( `${ this.nameOf( msg.peerId ) } 自报不可用：${ msg.reason ?? '未说明原因' }` );
+        if ( /WebGPU|引擎|构造/.test( msg.reason ?? '' ) )
+        {
+          this.o.events.onLog(
+            '提示：引擎写进清单后全网不可变。若要让这类设备参与，请点「停止」，' +
+            '然后以「只用 CPU」重新创建房间再开始训练。',
+          );
+        }
       }
       this.o.events.onRoster( [ ...this.rosterMap.values() ], this.selfId );
     }
@@ -674,13 +681,18 @@ export class FedNode
   /**
    * 引擎协商：取**能力下限**。
    *
-   * 规则很简单 —— 只要房间里有一台设备跑不了 WebGPU，全网就用 CPU。
-   * 因为引擎必须全网一致（权重形状不同没法聚合），而 CPU 引擎在任何设备上都能跑，
-   * 所以「回退 CPU」永远安全；反过来则会让那台设备彻底出局。
+   * 规则：
+   *   - 房间里有**一台已知设备**跑不了 WebGPU → 全网用 CPU
+   *   - **开训时房间里还没有其它设备 → 也用 CPU**
+   *
+   * 第二条是修出来的教训：房主先点「开始训练」、手机后加入，是「随时加入」承诺下
+   * 最常见的路径。若那一刻房间里只有房主自己（PC 有 WebGPU）就把引擎定成 GPU，
+   * 之后加入的手机会因构造不出引擎被挡在门外 —— 「随时加入」形同虚设。
+   * 引擎一旦写进清单就不可更改（权重形状不兼容），所以**开训那一刻还看不见的设备
+   * 也必须被考虑到**，宁可保守。
    *
    * 判据用 `gpuOk`（真拿到适配器）而不是 `webgpu`（navigator.gpu 存在）：
-   * 后者在下述情况会骗人 —— 有接口但拿不到适配器（驱动旧 / chrome://gpu 里被禁 /
-   * 远程桌面里没有 GPU）。宁可保守。
+   * 后者会骗人 —— 有接口但拿不到适配器（驱动旧 / chrome://gpu 被禁 / 远程桌面无 GPU）。
    */
   private negotiateEngine ( peers: PeerInfo[] ): { engine: EngineId; reason: string }
   {
@@ -692,13 +704,23 @@ export class FedNode
     {
       return { engine: 'mlp', reason: `房主本机（${ detectKind() }）没有可用的 WebGPU 适配器` };
     }
+    if ( peers.length === 0 )
+    {
+      return {
+        engine: 'mlp',
+        reason: '开训时房间里还没有其它设备 —— 为让手机等设备之后能随时加入，保守选用 CPU',
+      };
+    }
     const noGpu = peers.filter( ( p ) => p.device.gpuOk !== true );
     if ( noGpu.length > 0 )
     {
       const who = noGpu.map( ( p ) => `${ p.name }（${ p.device.kind }）` ).join( '、' );
       return { engine: 'mlp', reason: `${ who } 没有可用的 WebGPU 适配器 → 按能力下限全网回退 CPU` };
     }
-    return { engine: 'gpu-tinygpt', reason: '全网所有设备都能用 WebGPU' };
+    return {
+      engine: 'gpu-tinygpt',
+      reason: `当前 ${ peers.length } 台设备都能用 WebGPU（之后加入的设备也必须支持，否则无法参与）`,
+    };
   }
 
   /**
