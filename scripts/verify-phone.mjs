@@ -107,7 +107,8 @@ function ensureTunnels ()
   if ( !/tcp:5180/.test( rev ) ) adb( 'reverse', 'tcp:5180', 'tcp:5180' );
 }
 
-/** 转发规则在但 socket 可能已僵死（实测遇到过一次）：fetch 失败就 remove 再 add 自愈一次。 */
+/** 转发规则在但 socket 可能已僵死，或无线调试连接抖动后规则丢失：
+ *   fetch 失败就 remove 再 add，多重试几轮；仍不行就明确报错。 */
 async function ensureCdpReachable ()
 {
   const probe = async () =>
@@ -115,15 +116,20 @@ async function ensureCdpReachable ()
     try { await fetch( 'http://localhost:9222/json/version', { signal: AbortSignal.timeout( 4000 ) } ); return true; }
     catch { return false; }
   };
-  if ( await probe() ) return;
-  try
+  for ( let attempt = 0; attempt < 3; attempt++ )
   {
-    execFileSync( 'adb', [ '-s', SERIAL, 'forward', '--remove', 'tcp:9222' ], { timeout: 10000 } );
-    execFileSync( 'adb', [ '-s', SERIAL, 'forward', 'tcp:9222', 'localabstract:chrome_devtools_remote' ], { timeout: 10000 } );
+    if ( await probe() ) return;
+    try
+    {
+      execFileSync( 'adb', [ '-s', SERIAL, 'forward', '--remove', 'tcp:9222' ], { timeout: 10000 } );
+      execFileSync( 'adb', [ '-s', SERIAL, 'forward', 'tcp:9222', 'localabstract:chrome_devtools_remote' ], { timeout: 10000 } );
+      execFileSync( 'adb', [ '-s', SERIAL, 'reverse', 'tcp:5173', 'tcp:5173' ], { timeout: 10000 } );
+      execFileSync( 'adb', [ '-s', SERIAL, 'reverse', 'tcp:5180', 'tcp:5180' ], { timeout: 10000 } );
+    }
+    catch { /* 链接抖动时 adb 自身可能短暂 offline，忽略后重试 */ }
+    await delay( 2000 );
   }
-  catch { /* 忽略，下面再探 */ }
-  await delay( 1500 );
-  if ( !( await probe() ) ) throw new Error( '手机 CDP 转发不可达（9222）。检查无线调试是否被系统关掉' );
+  if ( !( await probe() ) ) throw new Error( '手机 CDP 转发不可达（9222）。检查无线调试是否被系统关掉、Edge 是否在运行' );
 }
 
 /** 确保手机上有浏览器在跑。这台机器的浏览器是 **Edge**（UA: EdgA，包名 com.microsoft.emmx）；
@@ -137,7 +143,7 @@ async function ensurePhoneBrowser ()
     if ( live ) return;
     try
     {
-      execFileSync( 'adb', [ '-s', SERIAL, 'shell', 'am', 'start', '-n', 'com.microsoft.emmx/com.microsoft.ruby.Main', '-a', 'android.intent.action.VIEW', '-d', `${ PHONE_BASE }/join.html` ], { timeout: 15000 } );
+      execFileSync( 'adb', [ '-s', SERIAL, 'shell', 'am', 'start', '-n', 'com.microsoft.emmx/com.microsoft.ruby.Main', '-a', 'android.intent.action.VIEW', '-d', `${ PHONE_BASE }/pages/join.html` ], { timeout: 15000 } );
     }
     catch { /* 忽略，下面重试 */ }
     await delay( 3500 );
@@ -269,8 +275,8 @@ async function openBoth ( hostCdp, peer, room, extra = '' )
     const p = new URLSearchParams( PARAMS );
     for ( const [ k, v ] of new URLSearchParams( extra ) ) p.set( k, v );
     const query = `${ p.toString() }&room=${ room }`;
-    await peer.send( 'Page.navigate', { url: `${ PHONE_BASE }/join.html?${ query }` } );
-    await hostCdp.send( 'Page.navigate', { url: `${ PC_BASE }/host.html?${ query }` } );
+    await peer.send( 'Page.navigate', { url: `${ PHONE_BASE }/pages/join.html?${ query }` } );
+    await hostCdp.send( 'Page.navigate', { url: `${ PC_BASE }/pages/host.html?${ query }` } );
     await waitFor( hostCdp, 'document.readyState === "complete"', 20000, 'PC 房主页加载' );
     await waitFor( peer, 'document.readyState === "complete"', 30000, '手机节点页加载' );
     await waitFor( hostCdp, '![...document.querySelectorAll("button")].find(b=>b.textContent.includes("创建训练房间")).disabled', 60000, 'PC 建房按钮就绪' );
@@ -458,7 +464,7 @@ async function scenarioRefresh ( hostCdp, phone )
     const reached = await waitHostRound( hostCdp, 2, 150000 );
     console.log( `[${ new Date().toLocaleTimeString() }] 主机已到第 2 轮（${ reached }），刷新手机页面模拟重连` );
 
-    const reloadOk = await peer.send( 'Page.navigate', { url: `${ PHONE_BASE }/join.html?${ PARAMS }&room=${ room }&rejoin=${ Date.now() }` } )
+    const reloadOk = await peer.send( 'Page.navigate', { url: `${ PHONE_BASE }/pages/join.html?${ PARAMS }&room=${ room }&rejoin=${ Date.now() }` } )
         .then( () => true ).catch( () => false );
     await waitFor( peer, `![...document.querySelectorAll("button")].find(b=>b.textContent.includes("加入房间")).disabled`, 60000, '手机页面重载' );
     await phoneJoin( peer, room );
@@ -526,7 +532,7 @@ async function scenarioKill ( hostCdp, phone )
 
     // 重启 Edge 并开一个**无参** join 页（am start 的 -d URL 会在第一个 & 处被截断，
     // 带不了房间号，所以只负责把浏览器拉起来，完整 URL 交给 CDP Page.navigate）。
-    execFileSync( 'adb', [ '-s', SERIAL, 'shell', 'am', 'start', '-n', 'com.microsoft.emmx/com.microsoft.ruby.Main', '-a', 'android.intent.action.VIEW', '-d', `${ PHONE_BASE }/join.html` ], { timeout: 15000 } );
+    execFileSync( 'adb', [ '-s', SERIAL, 'shell', 'am', 'start', '-n', 'com.microsoft.emmx/com.microsoft.ruby.Main', '-a', 'android.intent.action.VIEW', '-d', `${ PHONE_BASE }/pages/join.html` ], { timeout: 15000 } );
 
     // 找活着的页（恢复出来的僵尸页 CDP 超时，必须跳过）
     const live = await findLivePage( /join\.html/ );

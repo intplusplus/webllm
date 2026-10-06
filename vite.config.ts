@@ -12,10 +12,10 @@ export default defineConfig({
     // 用相对路径（相对 vite root，默认即项目根目录），避免在 ESM 配置里引入 node 类型。
     rollupOptions: {
       input: {
-        index: 'index.html',
-        fed: 'fed.html',
-        host: 'host.html',
-        join: 'join.html',
+        index: 'pages/index.html',
+        fed: 'pages/fed.html',
+        host: 'pages/host.html',
+        join: 'pages/join.html',
       },
     },
   },

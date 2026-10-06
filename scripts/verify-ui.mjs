@@ -43,8 +43,8 @@ const check = ( name, pass, detail ) => results.push( { name, pass, detail } );
 async function runScenario ( { name, query, base, cdpPort, shotPrefix } )
 {
   // 房主与节点是**两个页面**（host.html / join.html），职责不同，URL 也不同。
-  const hostUrl = `${ base }/host.html?${ query }`;
-  const peerUrl = `${ base }/join.html?${ query }`;
+  const hostUrl = `${ base }/pages/host.html?${ query }`;
+  const peerUrl = `${ base }/pages/join.html?${ query }`;
   const host = await newPage( cdpPort );
   const peer = await newPage( cdpPort );
   const dump = async ( tag, cdp ) =>

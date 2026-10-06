@@ -29,7 +29,7 @@ npm run demo     # 终端会打印本机地址 + 手机可用的局域网地址
 ## 环境要求
 
 WebGPU 支持的浏览器（Chrome / Edge 113+）。开发环境实测基线见 [docs/实施计划.md](docs/实施计划.md)，
-可用 [webgpu-check.html](webgpu-check.html) 在自己的机器上复测。
+可用 [webgpu-check.html](pages/webgpu-check.html) 在自己的机器上复测。
 
 ## 架构
 
@@ -69,7 +69,7 @@ src/
 
 ## 公共训练网络（联邦联训 Demo）
 
-[fed.html](fed.html) 是一个独立 Demo：**PC 与手机在同一个 WiFi 下打开网页，就能共同训练同一个模型**。
+[pages/fed.html](pages/fed.html) 是一个独立 Demo：**PC 与手机在同一个 WiFi 下打开网页，就能共同训练同一个模型**。
 数据不出本地，只交换权重，全程浏览器内完成、P2P 直连。
 
 ```
@@ -114,7 +114,7 @@ npm run verify:phone     # 真机双端联调（gpu 基线 / 刷新重连 / 杀�
 ```
 
 界面也支持用 URL 参数预置一份房间配置，方便分享与复现，例如
-`fed.html?quick=1&room=myroom&mode=local`（`quick=1` 用小配置快速跑通，
+`pages/fed.html?quick=1&room=myroom&mode=local`（`quick=1` 用小配置快速跑通，
 `mode=local` 走免服务器的本机通道）。
 
 自检关键结论（真实语料 Tiny Shakespeare，1,115,394 字符）：
@@ -160,6 +160,21 @@ DPO margin 0→5.1。解码吞吐从 1.2 → 10+ tokens/s，实测数据见
 [docs/性能实测记录.md](docs/性能实测记录.md)，bug 档案见
 [docs/bug记录.md](docs/bug记录.md)，各阶段验证方式见
 [docs/实施计划.md](docs/实施计划.md)。
+
+## AI / Harness 入口
+
+给任何 AI 编码助手的项目操作手册在仓库根 [AGENTS.md](AGENTS.md)（验证矩阵、真机联调
+SOP、工程不变量、无效手段黑名单）。各 harness 的薄适配（同源，避免多处漂移）：
+
+| Harness | 入口 |
+|---|---|
+| 通用（Codex/Jules/Zed/OpenHands…） | `AGENTS.md` |
+| Trae | `.trae/skills/webllm-dev-loop/` |
+| Claude Code | `CLAUDE.md`（`@AGENTS.md` 导入） |
+| Cursor | `.cursor/rules/webllm-dev-loop.mdc` |
+| GitHub Copilot | `.github/copilot-instructions.md` |
+| Cline | `.clinerules/webllm-dev-loop.md` |
+| Windsurf | `.windsurf/rules/webllm-dev-loop.md` |
 
 > 想快速建立全局理解？先读 [docs/架构总览.md](docs/架构总览.md)
 > （分层 / 调用链 / 不变量 / 测试体系 / 债务清单）。

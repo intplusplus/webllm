@@ -17,7 +17,7 @@ if ( !app ) throw new Error( '缺少 #app 容器' );
 const path = location.pathname.split( '/' ).pop() ?? '';
 // 单文件版（file://）没有路径可区分，由打包脚本注入 __WEBLLM_FED_VIEW__ 指定视图
 const forced = ( window as unknown as { __WEBLLM_FED_VIEW__?: 'host' | 'join' } ).__WEBLLM_FED_VIEW__;
-const view = forced ?? ( path === 'host.html' ? 'host' : path === 'join.html' ? 'join' : null );
+const view = forced ?? ( path.endsWith( 'host.html' ) ? 'host' : path.endsWith( 'join.html' ) ? 'join' : null );
 
 app.innerHTML = '';
 
@@ -57,7 +57,7 @@ else
     wrap.append( a );
   };
 
-  mk( '/host.html', '当房主（创建房间）', '设计任务、模型与参数，开训、聚合、下发全局权重' );
-  mk( '/join.html', '当训练节点（加入房间）', '浏览开放房间点一下就进；数据不出本地，只交换权重' );
+  mk( '/pages/host.html', '当房主（创建房间）', '设计任务、模型与参数，开训、聚合、下发全局权重' );
+  mk( '/pages/join.html', '当训练节点（加入房间）', '浏览开放房间点一下就进；数据不出本地，只交换权重' );
   app.append( wrap );
 }

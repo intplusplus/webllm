@@ -1291,7 +1291,7 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   {
     const switchBar = el( 'p', 'hint' );
     const a = document.createElement( 'a' );
-    a.href = view === 'host' ? '/join.html' : '/host.html';
+    a.href = view === 'host' ? '/pages/join.html' : '/pages/host.html';
     a.textContent = view === 'host' ? '→ 切换到加入页（浏览开放房间）' : '→ 切换到房主页（创建并设计房间）';
     switchBar.append( a );
     head.append( switchBar );

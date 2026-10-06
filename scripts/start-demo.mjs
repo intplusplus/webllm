@@ -68,7 +68,7 @@ console.log( `\n${ line }` );
 console.log( `  公共训练网络 · 联邦联训 Demo   （${ useHttps ? 'HTTPS' : 'HTTP'}）` );
 console.log( line );
 console.log( `  信令服务   ${ wsScheme }://127.0.0.1:${ SIGNAL_PORT }   （健康检查 http://127.0.0.1:${ SIGNAL_PORT }/health）` );
-console.log( `  本机打开   ${ scheme }://127.0.0.1:${ VITE_PORT }/fed.html` );
+console.log( `  本机打开   ${ scheme }://127.0.0.1:${ VITE_PORT }/pages/fed.html` );
 
 if ( ips.length === 0 )
 {
@@ -77,7 +77,7 @@ if ( ips.length === 0 )
 else
 {
   console.log( `\n  ★ 手机在同一个 WiFi 下打开这个地址（建议直接抄进手机浏览器）：\n` );
-  for ( const ip of ips ) console.log( `        ${ scheme }://${ ip }:${ VITE_PORT }/fed.html` );
+  for ( const ip of ips ) console.log( `        ${ scheme }://${ ip }:${ VITE_PORT }/pages/fed.html` );
 }
 
 console.log( `\n  三步跑起来：` );
@@ -91,7 +91,7 @@ if ( useHttps )
   console.log( `\n  手机第一次访问 https 会被拦，按这个顺序做一次即可：` );
   console.log( `    ① 手机浏览器打开  http://${ ips[ 0 ] ?? '<电脑IP>' }:${ CA_PORT }/ca.crt` );
   console.log( '       下载后：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书 → 选刚下的文件' );
-  console.log( `    ② 然后打开  https://${ ips[ 0 ] ?? '<电脑IP>' }:${ VITE_PORT }/fed.html` );
+  console.log( `    ② 然后打开  https://${ ips[ 0 ] ?? '<电脑IP>' }:${ VITE_PORT }/pages/fed.html` );
   console.log( `  （本地 CA 放在 ${ path.relative( root, caInfo.dir ) }，重装系统或换 IP 会自动重签）` );
 }
 else
