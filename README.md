@@ -86,6 +86,11 @@ Peer  Peer  Peer   各自在本地数据分片上训练，只上报权重
   （过滤到房间字符表后并入本地训练池，不上传）。
 - **两种联机方式**：跨设备走 WebRTC + 信令（PC ↔ 手机）；
   **本机多标签页走 BroadcastChannel，零服务器**。
+- **真机双端联调**（`npm run verify:phone`）：ADB 无线连接手机后自动完成
+  端口转发、拉起浏览器、驱动两端跑完整房间。手机拿 WebGPU 的正解是
+  `adb reverse tcp:5173 tcp:5173` 后用 `http://localhost:5173` 打开
+  （localhost 是安全上下文，免证书免 flags）。踩坑与场景说明见
+  [docs/真机联调指南.md](docs/真机联调指南.md)。
 
 完整规划见 [docs/公共AI网络-规划.md](docs/公共AI网络-规划.md)，
 「多设备一起训一个模型有哪几种做法、该选哪种」见
@@ -99,8 +104,9 @@ npm run probe:webgpu     # 探测本机浏览器到底能不能拿到 WebGPU 适
 
 npm run verify:fed       # 联邦训练核心自检（19 项）
 npm run verify:e2e       # 端到端测试（16 项，3 节点房间里 1 个故意作弊）
-npm run verify:signal    # 信令链路自检（7 项，含跨 64KB 长帧）
-npm run verify:ui        # 真实浏览器界面测试（16 项，含 WebRTC 场景）
+npm run verify:signal    # 信令链路自检（9 项，含跨 64KB 长帧与心跳回归）
+npm run verify:ui        # 真实浏览器界面测试（20 项，含 WebRTC 场景）
+npm run verify:phone     # 真机双端联调（gpu 基线 / 刷新重连 / 杀浏览器重连）
 ```
 
 界面也支持用 URL 参数预置一份房间配置，方便分享与复现，例如
@@ -112,14 +118,18 @@ npm run verify:ui        # 真实浏览器界面测试（16 项，含 WebRTC 场
 - **联邦确实优于独训**（CPU 引擎）：初始探针 loss 4.182 → 联邦 2.824，单节点独训同总步数均值 2.979
 - **WebGPU 引擎端到端可用**（真实浏览器实测）：106,369 参数的 tiny-GPT，
   探针 loss 4.172 → 3.200，6 轮 6.3 秒；WebRTC 与 BroadcastChannel 两条链路都验证过
+- **真机双端联调通过**（PC × 手机 Edge/Adreno，`npm run verify:phone`）：
+  large 档 GPU 模型 **814,017 参数**，40 轮探针 loss 4.174 → 2.369，两端权重摘要一致；
+  训练中刷新页面 / 杀掉浏览器重启，均能重连并**对齐到当前轮**后继续参与
 - **聚合方式实测对比**：FedAvg 2.824 vs DiLoCo(η=0.7,β=0.9) 3.310 ——
   这个规模下 FedAvg 反而更好，所以默认用 FedAvg（详见共同训练方式选型文档）
 - **权重帧可靠**：54,300 字节逐位无损往返，篡改 1 字节即被摘要拦下
 - **信任层真的抓得到作弊**（打开交叉校验时）：端到端测试里有一个节点从第 2 轮起谎报
   probeLoss（+1.0），被主机探针复算抓出并剔除，其份额归 0
 
-一个需要知道的成本事实：WebGPU tiny-GPT 满权重交换约 **832 KB/轮**（2 节点）。
-这是后续要上 LoRA / 梯度压缩的直接原因（见共同训练方式选型文档）。
+一个需要知道的成本事实：WebGPU tiny-GPT 满权重交换约 **832 KB/轮**（2 节点），
+large 档约 2.5 MB/轮。这是后续要上 LoRA / 梯度压缩的直接原因
+（见共同训练方式选型文档）。
 
 ## 验证标准
 

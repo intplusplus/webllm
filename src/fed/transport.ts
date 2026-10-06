@@ -49,6 +49,13 @@ export interface Transport
   /** 广播，except 用于排除发送者自身；返回送达数 */
   broadcast ( data: string | ArrayBuffer, except?: string ): number;
   /**
+   * 二进制大帧（全局权重）广播：带**发送背压**，返回成功送达数。
+   * WebRTC 的 dc.send 在队列满时会同步抛异常，大帧必须走这条路
+   * （2026-10-06 联调实测：同步连发 2.5MB 权重帧把主机训练循环炸断过）。
+   * LocalBus 走 BroadcastChannel，无队列上限，直接等价于 broadcast。
+   */
+  broadcastBinary ( buf: ArrayBuffer, except?: string ): Promise<number>;
+  /**
    * 向信令服务器上报房间的「自我介绍」，供其它设备在「挑房间」列表里看到。
    * 可选：只有走信令的 RoomTransport 支持；本机总线（LocalBus）没有服务器，用不上。
    */
@@ -76,6 +83,18 @@ interface SignalFrame
  */
 const CHUNK_SIZE = 16 * 1024;
 const CHUNK_HEADER = 12;
+/**
+ * 发送队列高水位：超过它就等接收端排空再发。
+ *
+ * 2026-10-06 双端联调实测的 P0 bug：主机每轮把 ~2.5MB 全局权重分 160 块
+ * **连续同步** dc.send，手机刚重连还在本地训练、消费不过来 → SCTP 发送队列
+ * 撑满 → dc.send **同步抛异常**（"RTCDataChannel send queue is full"）→
+ * 异常一路穿透 hostRound → 房主循环中断，训练死一半、没有模型卡。
+ * 大帧一律走 sendBinary 的背压路径；所有 dc.send 都必须 try/catch。
+ */
+const DC_HIGH_WATER = 512 * 1024;
+/** 等排空的最长时间：超时也放行（丢一帧比卡死一个轮次强），接收端按传输号丢弃残帧。 */
+const DC_DRAIN_TIMEOUT_MS = 8000;
 
 interface Inbound
 {
@@ -172,16 +191,32 @@ class RoomLink
     if ( !this.dc || this.dc.readyState !== 'open' ) return false;
     if ( typeof data === 'string' )
     {
-      this.dc.send( data );
-      return true;
+      try { this.dc.send( data ); return true; }
+      catch { return false; } // 控制帧发送失败（队列满/通道断）：丢帧不抛，绝不炸上层循环
     }
+    // 二进制大帧走背压通道（异步 fire-and-forget；要确认送达的调用方用 sendBinary）
+    void this.sendBinary( data );
+    return true;
+  }
 
-    const buf = data;
+  /**
+   * 大帧：分块 + **背压**发送。任一步失败即中止本次传输并返回 false，绝不抛。
+   *
+   * 背压是必须的：同步连发 160 个 16KB 块会把 SCTP 发送队列撑爆（见 DC_HIGH_WATER 注释），
+   * 而队列满时 dc.send 是**同步抛异常**的。等 bufferedamountlow 排空比丢帧好，
+   * 比把主机训练循环炸断更是好得多。
+   */
+  async sendBinary ( buf: ArrayBuffer ): Promise<boolean>
+  {
+    const dc = this.dc;
+    if ( !dc || dc.readyState !== 'open' ) return false;
     const total = Math.max( 1, Math.ceil( buf.byteLength / CHUNK_SIZE ) );
     const id = this.nextTransferId++;
+    if ( this.nextTransferId > 0xfffffff0 ) this.nextTransferId = 1;
     const src = new Uint8Array( buf );
     for ( let seq = 0; seq < total; seq++ )
     {
+      if ( !await this.drain() ) return false;
       const start = seq * CHUNK_SIZE;
       const end = Math.min( start + CHUNK_SIZE, buf.byteLength );
       const msg = new ArrayBuffer( CHUNK_HEADER + ( end - start ) );
@@ -190,14 +225,35 @@ class RoomLink
       dv.setUint32( 4, seq );
       dv.setUint32( 8, total );
       new Uint8Array( msg, CHUNK_HEADER ).set( src.subarray( start, end ) );
-      this.dc.send( msg );
+      try { dc.send( msg ); }
+      catch { return false; } // 队列还是满了 / 通道断：中止本次传输（接收端按 id 丢弃残帧）
     }
-    if ( this.nextTransferId > 0xfffffff0 ) this.nextTransferId = 1;
     return true;
+  }
+
+  /** 等发送队列排到高水位以下；通道断了返回 false。超时也放行（不能卡死轮次）。 */
+  private async drain (): Promise<boolean>
+  {
+    const dc = this.dc;
+    if ( !dc || dc.readyState !== 'open' ) return false;
+    if ( dc.bufferedAmount <= DC_HIGH_WATER ) return true;
+    await new Promise<void>( ( resolve ) =>
+    {
+      const done = (): void =>
+      {
+        dc.removeEventListener( 'bufferedamountlow', done );
+        resolve();
+      };
+      dc.addEventListener( 'bufferedamountlow', done );
+      dc.bufferedAmountLowThreshold = Math.max( 65536, Math.floor( DC_HIGH_WATER / 2 ) );
+      setTimeout( done, DC_DRAIN_TIMEOUT_MS );
+    } );
+    return this.dc?.readyState === 'open';
   }
 
   close (): void
   {
+    this.inbox.clear(); // 半收的传输没有意义了，别漏着占内存
     try { this.dc?.close(); } catch { /* 忽略 */ }
     try { this.pc.close(); } catch { /* 忽略 */ }
   }
@@ -487,6 +543,23 @@ export class RoomTransport implements Transport
       if ( link.send( data ) ) n += 1;
     }
     return n;
+  }
+
+  /**
+   * 大帧广播：逐链路背压发送，全部完成才 resolve。
+   * 房主用它发全局权重，并**await** 之后再发 round/close —— 保证
+   * 「权重帧先于收尾帧」的顺序（异步分块也不能乱）。
+   */
+  async broadcastBinary ( buf: ArrayBuffer, except?: string ): Promise<number>
+  {
+    const jobs: Array<Promise<boolean>> = [];
+    for ( const [ id, link ] of this.links )
+    {
+      if ( id === except ) continue;
+      jobs.push( link.sendBinary( buf ) );
+    }
+    const oks = await Promise.all( jobs );
+    return oks.filter( Boolean ).length;
   }
 
   close (): void

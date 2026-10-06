@@ -127,3 +127,64 @@ GB/s = 987.8 / (ms/1000) / 1000。
 
 **防回归**：新增任何工具目录时同步检查 `.gitignore`；
 提交前 `git status --short` 目检一次清单。
+
+---
+
+## BUG-007 信令服务器心跳：pong 不复位 alive，连接活不过 ~50 秒
+
+**修复提交**：2026-10-06 双端联调（signal-server.mjs + verify-signal.mjs 心跳回归）
+
+**现象**（极具欺骗性）：训练数据走 WebRTC DataChannel，所以**模型照训**、
+界面照常逐轮更新；但约 45 秒后节点被静默踢出房间（主机记「本轮未上报」、
+刷新重连的节点发现「房主不在」、手机状态停在「信令连接已断开」）。
+单凭任何一端界面都看不出根因。
+
+**根因**：`signal-server.mjs` 的 `entry.alive` 建连时置 `true`，注释写着
+「25s 未收到 pong 就断开」，但**收到 pong 的代码路径根本不存在** ——
+`decodeFrames` 里 opcode 0xa 直接 `continue`。于是任何连接在两个心跳周期
+（≈50s）后被定时器单方面 `sock.destroy()`。
+
+**为何逃过测试**：verify-signal 的 7 个用例全在连接建立后数秒内跑完，
+没有一个覆盖「存活超过两个心跳周期」；且 WebRTC 直连不依赖信令，
+训练主路径完全正常。
+
+**修复**：`decodeFrames` 增加 `onPong` 回调；收到 pong 时把该连接的
+`alive` 复位为 `true`。心跳间隔参数化（`startSignalServer(port, { beatMs })`）。
+
+**防回归**：verify-signal 新增**裸 socket** 心跳回归（内置 WebSocket 会把
+ping/pong 对 JS 隐藏，必须自己读写帧）：按时回 pong 的连接存活 ≥9 拍；
+不回 pong 的连接两拍内被踢。第一版修复曾把 `alive=true` 误放在
+「收到 ping」回调里，被这条测试当场抓住 —— 协议级行为别用高层客户端自证。
+
+---
+
+## BUG-008 RTCDataChannel 发送队列溢出，同步连发大帧炸断房主循环
+
+**修复提交**：2026-10-06 双端联调（transport.ts / bus.ts / node.ts）
+
+**现象**：手机在训练中途重连（浏览器重启）后，主机日志出现
+`房主循环中断：Failed to execute 'send' on 'RTCDataChannel':
+RTCDataChannel send queue is full`，训练死在中途：没有后续轮次、
+没有模型卡、两端权重不再一致。
+
+**根因**：`RoomLink.send()` 把 ~2.5MB 的全局权重帧同步连发 160 个
+16KB 块。手机刚重连还在本地训练、消费不过来，SCTP 发送队列撑满后
+`dc.send()` **同步抛异常**，异常穿透 `hostRound` → `startHost` catch →
+整个房主循环中断。`Transport` 接口此前没有任何背压与异常边界。
+
+**为何逃过测试**：verify-ui 的两个场景都是本机回环、Peer 消费及时，
+队列从不积压；权重帧 832KB~2.5MB 只在真机 + 慢节点 + 重连场景才触顶。
+
+**修复**：
+- `RoomLink.sendBinary()`：分块发送前检查 `bufferedAmount`，超过
+  512KB 高水位就等 `bufferedamountlow` 排空（8s 兜底超时，丢帧不卡死）；
+  每块 `dc.send` 包 try/catch，失败即中止本次传输并返回 false，绝不抛。
+- `RoomLink.send()`：字符串控制帧也包 try/catch。
+- 接口新增 `broadcastBinary()`（大帧广播，逐链路背压，可 await）；
+  `hostRound` await 它之后再发 round/close，保住「权重帧先于收尾帧」的顺序。
+- LocalBus 无队列上限，`broadcastBinary` 直接透传。
+- `RoomLink.close()` 清理半收的 inbox。
+
+**防回归**：kill 场景（杀浏览器 → 重启 → 训练中重连）纳入 `npm run verify:phone`，
+两节点真机跑 40 轮；联调脚本对「主机页面异常/循环中断」有快速失败与取证。
+教训：**任何 dc.send / postMessage 都可能抛，跨设备大帧必须背压**。

@@ -130,6 +130,40 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   const curveGlobal: Array<{ x: number; y: number }> = [];
   const logs: string[] = [];
 
+  // ---------- 屏幕唤醒锁 ----------
+  // 双端联调实测（2026-10-06）：手机默认灭屏后 Chrome 会**冻结页面**，节点从此静默
+  // 停止上报，主机等超时后按「掉线止损」继续跑 —— 用户看到的就是「手机一灭屏就掉队」。
+  // 训练期间持有 screen 唤醒锁，保住这颗页面的执行权。需要安全上下文（localhost/https 都有）。
+  let wakeLock: { release: () => Promise<void> } | null = null;
+  let trainingActive = false;
+
+  async function holdWakeLock (): Promise<void>
+  {
+    trainingActive = true;
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: ( type: string ) => Promise<{ release: () => Promise<void> }> };
+    };
+    try
+    {
+      if ( nav.wakeLock && !wakeLock ) wakeLock = await nav.wakeLock.request( 'screen' );
+    }
+    catch { /* 被拒绝或不支持：不影响训练本身，只是可能被系统冻结 */ }
+  }
+
+  function releaseWakeLock (): void
+  {
+    trainingActive = false;
+    try { void wakeLock?.release().catch( () => {} ); }
+    catch { /* 忽略 */ }
+    wakeLock = null;
+  }
+
+  // 唤醒锁在页面隐藏时会自动释放 —— 重新可见且训练还在进行就补锁
+  document.addEventListener( 'visibilitychange', () =>
+  {
+    if ( document.visibilityState === 'visible' && trainingActive && !wakeLock ) void holdWakeLock();
+  } );
+
   // ---------- 骨架 ----------
   const head = el( 'div', 'fed-head' );
   head.append( el( 'h1', undefined, view === 'host' ? '房主 · 创建并设计训练房间' : '训练节点 · 加入房间' ) );
@@ -882,7 +916,12 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
     onStatus: setStatus,
     onLog: addLog,
     onRoster: ( peers, selfId ) => renderRoster( peers, selfId ),
-    onManifest: ( m, shardIndex ) => renderManifest( m, shardIndex ),
+    onManifest: ( m, shardIndex ) =>
+    {
+      // 房主在开训时、节点在收到 assign 时都会走到这 —— 训练一开始就保住屏幕
+      void holdWakeLock();
+      renderManifest( m, shardIndex );
+    },
     onRound: ( stats, total ) =>
     {
       // 节点侧拿不到主机的 onCurve，用 round/close 里的全局 loss 补曲线
@@ -898,6 +937,7 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
     },
     onDone: ( c ) =>
     {
+      releaseWakeLock();
       renderCard( c );
       setBusy( false );
     },
@@ -1146,6 +1186,7 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   function resetConnection (): void
   {
     node?.stop();
+    releaseWakeLock();
     transport?.close();
     transport = null;
     node = null;
@@ -1196,7 +1237,11 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
       .startHost( ( engine, reason ) => buildManifest( corpus!, engine, reason ) )
       .finally( () => setBusy( false ) );
   };
-  btnStop.onclick = () => node?.stop();
+  btnStop.onclick = () =>
+  {
+    releaseWakeLock();
+    node?.stop();
+  };
   btnGen.onclick = () =>
   {
     void ( async () =>

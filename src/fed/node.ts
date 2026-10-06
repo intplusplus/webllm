@@ -855,7 +855,10 @@ export class FedNode
     const globalBuf = encodeWeights( global );
     const fanout = Math.max( 1, peers.length );
     this.transportBytes += globalBuf.byteLength * fanout;
-    this.o.transport.broadcast( globalBuf );
+    // 大帧走背压广播并 **await**：保证权重帧先于紧随其后的 round/close
+    // （异步分块下也不能乱序）。同步连发会撑爆 RTCDataChannel 发送队列，
+    // 2026-10-06 联调实测把房主循环炸断过（房主循环中断：send queue is full）。
+    await this.o.transport.broadcastBinary( globalBuf );
 
     let submitted = 0;
     for ( const s of this.submissions.values() ) submitted += s.bytes;

@@ -57,7 +57,7 @@ function encodeFrame ( str, opcode = 0x1 )
 }
 
 /** 从 socket 缓冲区里尽量多解出完整帧；返回剩余缓冲。 */
-function decodeFrames ( buf, onText, onClose, onPing )
+function decodeFrames ( buf, onText, onClose, onPing, onPong = () => {} )
 {
   let rest = buf;
   for ( ;; )
@@ -95,7 +95,7 @@ function decodeFrames ( buf, onText, onClose, onPing )
 
     if ( opcode === 0x8 ) { onClose(); return Buffer.alloc( 0 ); }
     if ( opcode === 0x9 ) { onPing( payload ); continue; }
-    if ( opcode === 0xa ) continue; // pong
+    if ( opcode === 0xa ) { onPong(); continue; } // pong —— 心跳的续命帧，见下方 onPong
     if ( opcode === 0x1 || opcode === 0x0 )
     {
       onText( payload.toString( 'utf8' ), fin );
@@ -194,7 +194,7 @@ function stats ()
 
 // ------------------------------------------------------------------ 服务
 
-export function startSignalServer ( port = DEFAULT_PORT )
+export function startSignalServer ( port = DEFAULT_PORT, { beatMs = 25000 } = {} )
 {
   const server = http.createServer( ( req, res ) =>
   {
@@ -300,6 +300,18 @@ export function startSignalServer ( port = DEFAULT_PORT )
           },
           () => cleanup(),
           ( payload ) => { try { sock.write( encodeFrame( payload.toString( 'utf8' ), 0xa ) ); } catch { /* 忽略 */ } },
+          () =>
+          {
+            // 收到客户端的 pong（对服务端心跳的回应）→ 这条连接还活着。
+            // **曾经漏了这一步**：alive 建连=true 后再无复位路径，任何连接活不过
+            // 两个心跳周期（25s×2）就被下面的定时器单方面销毁。症状极具欺骗性：
+            // 训练数据走 WebRTC DataChannel 所以模型照训，但 ~45s 后节点被静默踢出
+            // 房间（刷新重连的节点还会发现"房主不在"）。2026-10-06 双端联调实测抓到，
+            // 回归测试见 verify-signal.mjs 的心跳一节（裸 socket，协议级验证）。
+            const r = roomId ? rooms.get( roomId ) : null;
+            const e = r?.get( peerId );
+            if ( e ) e.alive = true;
+          },
         );
       }
       catch ( err )
@@ -313,7 +325,7 @@ export function startSignalServer ( port = DEFAULT_PORT )
     sock.on( 'error', cleanup );
   } );
 
-  // 心跳：25s 未收到 pong 就断开，避免死连接占位
+  // 心跳：未收到 pong 就断开，避免死连接占位
   const beat = setInterval( () =>
   {
     for ( const m of rooms.values() )
@@ -329,7 +341,7 @@ export function startSignalServer ( port = DEFAULT_PORT )
         try { entry.sock.write( encodeFrame( 'ping', 0x9 ) ); } catch { /* 忽略 */ }
       }
     }
-  }, 25000 );
+  }, beatMs );
   beat.unref?.();
 
   return new Promise( ( resolve ) =>

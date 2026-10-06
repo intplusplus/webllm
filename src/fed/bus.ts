@@ -145,6 +145,12 @@ export class LocalBus implements Transport
     return n;
   }
 
+  /** BroadcastChannel 没有发送队列上限，大帧广播直接等价于 broadcast。 */
+  broadcastBinary ( buf: ArrayBuffer, except?: string ): Promise<number>
+  {
+    return Promise.resolve( this.broadcast( buf, except ) );
+  }
+
   close (): void
   {
     if ( this.closed ) return;
