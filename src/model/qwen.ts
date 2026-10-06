@@ -32,33 +32,37 @@ import siluMulWgsl from '../gpu/kernels/silu_mul.wgsl?raw';
 const MAX_T = 512;
 
 /**
- * split-K 的调度目标：一次投影至少要排满约 24 个 workgroup（Vega 8~11 CU 的
- * 2~3 倍覆盖，留出延迟隐藏空间）才不浪费算力。低于该值就把 K 维切段并行。
+ * split-K 的调度目标：一次投影至少要排满约 256 个 workgroup 才能接近饱和带宽。
+ *
+ * 依据（timestamp-query 逐 pass 实测，见 tests/profile-decode.ts）：
+ * lm_head 以 594 wg 跑出 ~18.4 GB/s（≈20.2 GB/s 实测峰值），而 32~38 wg 的
+ * 投影只有 5.8~9.7 GB/s —— 这块核显需要数百 workgroup 才能饱和带宽，
+ * 早期的 24 wg 目标过于保守（解码 10.2 t/s 时的主要剩余瓶颈）。
  */
-const GEMV_SPLIT_TARGET_WG = 24;
-/** K 段数上限：段太短会放大归约与调度开销，8 已足够填满核显。 */
-const GEMV_SPLIT_MAX = 8;
+const GEMV_SPLIT_TARGET_WG = 256;
+/** K 段数上限：段太短（K/S < ~14）会放大归约与调度开销。 */
+const GEMV_SPLIT_MAX = 64;
 
 /**
- * 选 split-K 的段数 S ∈ {2,4,8}（返回 1 表示不切）。
+ * 选 split-K 的段数 S ∈ {8,16,32,64}（返回 1 表示不切）。
  *
  * 原则：在满足 K % S == 0 且 (K/S) % 2 == 0（u32 边界）的前提下，
  * 取能让 workgroup 总数达到 GEMV_SPLIT_TARGET_WG 的最小 S；
  * 若所有档位都达不到（N 特别小，如 k/v_proj 只有 1 个 workgroup），
  * 取最大的可用 S——并行度仍是纯收益。
  *
- * 真实模型的调度结果：
- *   k/v_proj (N=128, 1 wg)  → S=8 → 8 wg
- *   q/o_proj (N=896, 4 wg)  → S=8 → 32 wg
- *   down_proj (N=896, 4 wg) → S=8 → 32 wg
- *   gate/up (N=4864, 19 wg) → S=2 → 38 wg
- *   lm_head (N=151936, 594 wg) → 不切（并行度已足够）
+ * 真实模型（Qwen2.5-0.5B）的调度结果：
+ *   k/v_proj (N=128, 1 wg)   → S=64 → 64 wg（受 K=896 上限所限）
+ *   q/o_proj (N=896, 4 wg)   → S=64 → 256 wg
+ *   down_proj (N=896, 4 wg)  → S=64 → 256 wg（K=4864）
+ *   gate/up (N=4864, 19 wg)  → S=16 → 304 wg
+ *   lm_head (N=151936, 594 wg) → 不切（并行度已达标）
  */
-function planGemvSplit ( wgN: number, K: number ): number
+export function planGemvSplit ( wgN: number, K: number ): number
 {
     if ( wgN >= GEMV_SPLIT_TARGET_WG ) return 1;
     let s = 1;
-    for ( const cand of [ 2, 4, GEMV_SPLIT_MAX ] )
+    for ( const cand of [ 8, 16, 32, GEMV_SPLIT_MAX ] )
     {
         if ( K % cand === 0 && ( K / cand ) % 2 === 0 )
         {
@@ -575,7 +579,8 @@ export class QwenGpt
             if ( split > 1 )
             {
                 // split-K：S 段并行算部分和 → reduce 归约（bias 只在归约端加一次）。
-                // partial 由 Arena 分配，两次 dispatch 之间按提交顺序复用，天然安全。
+                // partial 由 Arena 分配。split 写 partial → reduce 读 partial 是 RAW，
+                // 必须用 passBreak 分隔（同一 pass 内的 dispatch 间无内存屏障）。
                 const partial = this.arena.allocFloat32( split * N, [ split, N ] );
                 const us = this.uniform( `gemvsplit:${ N }:${ K }:${ split }:${ hasBias ? 1 : 0 }`, ( p ) =>
                     p.u32( N ).u32( K ).u32( split ).u32( hasBias ? 1 : 0 ) );
@@ -584,11 +589,16 @@ export class QwenGpt
                     [ tensorResource( A ), this.wf16( weight ), tensorResource( partial ), us ],
                     [ wgN, split ],
                 );
+                this.passBreak();
                 this.run(
                     this.pGemvReduce,
                     [ tensorResource( partial ), tensorResource( C ), biasBuffer, us ],
                     wgN,
                 );
+                // reduce 后也断开：保证「每个 split gemm 恰好占 2 个 pass」的确定性布局
+                // （否则 reduce 会与下一个 gemm 的 split 合并，剖析布局无法静态重建；
+                //  多出的 3 pass/层 ≈ +4% barrier 开销，换取布局可预测性）
+                this.passBreak();
                 return;
             }
 
