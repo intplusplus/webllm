@@ -40,12 +40,13 @@ WebGPU 支持的浏览器（Chrome / Edge 113+）。开发环境实测基线见 
 src/
 ├── gpu/          # device / arena / buffer / pipeline + kernels/*.wgsl（35 个自研算子）
 ├── model/        # tiny-gpt 前反向图、权重初始化、Qwen 架构
-├── train/        # 训练循环、AdamW、语料 batch
+├── train/        # 训练循环、AdamW、语料 batch、SFT/DPO 指令数据
 ├── infer/        # 生成循环 + KV cache、temperature/top-k/top-p采样
 ├── tokenizer/    # Qwen BPE
 ├── weights/      # safetensors 解析、GPTQ int4 反量化、权重上传
+├── store/        # IndexedDB checkpoint（权重 + AdamW 状态）
 ├── reference/    # CPU 参考实现（GPU 对拍基准）
-└── tests/        # 算子对拍、梯度检验、训练闭环、推理对拍
+└── tests/        # 算子对拍、梯度检验、SFT/DPO/checkpoint、推理对拍
 ```
 
 关键约束（详细推导见实施计划）：
@@ -69,10 +70,15 @@ src/
 
 ## 里程碑
 
-M0 基建 → M1 前向算子 → M2 训练闭环 → M3 性能优化 → M4 加载 Qwen → M5 完善。
-M0–M4 已完成；M5 进行中（KV cache / 解码 GEMV / split-K / dispatch 合并），
-解码吞吐从 1.2 → 10+ tokens/s，优化的完整实测数据与结论见
-[docs/性能实测记录.md](docs/性能实测记录.md)，修复过的 bug 档案见
+M0 基建 → M1 前向算子 → M2 训练闭环 → M3 性能优化 → M4 加载 Qwen → M5 解码
+优化（KV cache / GEMV / split-K / dispatch 合并）→ M6 后训练管线。
+
+M0–M5 已完成；M6 已落地：**SFT 指令微调**（masked CE，loss 只计 completion）、
+**IndexedDB checkpoint**（权重 + AdamW 状态无损往返）、**DPO 偏好对齐**
+（冻结 reference + 逐行加权 CE 反向）。全部浏览器端，端到端实测：
+SFT loss 3.5→0.06（held-out 泛化 7/8）、checkpoint 往返逐位一致、
+DPO margin 0→5.1。解码吞吐从 1.2 → 10+ tokens/s，实测数据见
+[docs/性能实测记录.md](docs/性能实测记录.md)，bug 档案见
 [docs/bug记录.md](docs/bug记录.md)，各阶段验证方式见
 [docs/实施计划.md](docs/实施计划.md)。
 

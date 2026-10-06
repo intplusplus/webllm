@@ -1,11 +1,19 @@
-// 交叉熵（softmax + NLL）反向：dlogits[m,v] = (softmax(logits[m])[v] - [v==target[m]]) / M。
+// 交叉熵（softmax + NLL）反向，支持逐行权重：
+//   dlogits[m,v] = w[m] * (softmax(logits[m])[v] - [v==target[m]])
+//
+// w[m] 的三种用法（由调用方归一后传入）：
+//   - 预训练：w ≡ 1/M —— 等价于平均 CE（旧行为）
+//   - SFT：prompt/masked 位置 w=0（loss 只算 completion），有效行 w=1/N
+//   - DPO：chosen 行 w=+β(1-σ(z))/N、rejected 行 w=-β(1-σ(z))/N ——
+//     把标量 loss 对 token-logprob 之和的梯度折进 CE 反向
 // 一个 workgroup 负责一行。
 struct Dims { M: u32, V: u32, _a: u32, _b: u32 };
 
 @group(0) @binding(0) var<storage, read> logits: array<f32>;
 @group(0) @binding(1) var<storage, read> targets: array<u32>;
-@group(0) @binding(2) var<storage, read_write> dlogits: array<f32>;
-@group(0) @binding(3) var<uniform> dims: Dims;
+@group(0) @binding(2) var<storage, read> weights: array<f32>;
+@group(0) @binding(3) var<storage, read_write> dlogits: array<f32>;
+@group(0) @binding(4) var<uniform> dims: Dims;
 
 var<workgroup> red: array<f32, 256>;
 
@@ -19,6 +27,18 @@ fn main(
   let tid = lid.x;
   let V = dims.V;
   let base = row * V;
+  let w = weights[row];
+
+  if (w == 0.0) {
+    // masked 行：零梯度，直接清零返回（softmax 也无需计算）
+    var vz = tid;
+    loop {
+      if (vz >= V) { break; }
+      dlogits[base + vz] = 0.0;
+      vz = vz + 256u;
+    }
+    return;
+  }
 
   // max
   var mx = -1e30;
@@ -61,13 +81,12 @@ fn main(
   workgroupBarrier();
 
   let tgt = targets[row];
-  let invM = 1.0 / f32(dims.M);
   var v3 = tid;
   loop {
     if (v3 >= V) { break; }
     let p = exp(logits[base + v3] - m) / sum;
     let one = select(0.0, 1.0, v3 == tgt);
-    dlogits[base + v3] = (p - one) * invM;
+    dlogits[base + v3] = w * (p - one);
     v3 = v3 + 256u;
   }
 }

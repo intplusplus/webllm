@@ -16,6 +16,7 @@ import { testQwenWeightFormat } from './qwen-format';
 import { testTokenizer } from './tokenizer';
 import { testQwenArch, testQwenKvCache } from './qwen-arch';
 import { testQwenInfer } from './qwen-infer';
+import { testSft, testCheckpoint, testDpo } from './posttrain';
 
 /**
  * M1 关键验证：完整 GPT 前向的 GPU logits 与独立 CPU 参考实现逐元素对拍。
@@ -65,4 +66,7 @@ export const modelTests: SelfTest[] = [
   { name: 'M4-3 Qwen2 架构端到端对拍（GPU vs CPU 参考）', run: testQwenArch },
   { name: 'M5 KV cache 增量解码（vs 无 cache 全量前向）', run: testQwenKvCache },
   { name: 'M4-4 真实 Qwen2.5-0.5B int4 加载与推理', run: testQwenInfer },
+  { name: 'M6-1 SFT 指令微调（masked CE + 过拟合 + held-out 生成）', run: testSft },
+  { name: 'M6-2 IndexedDB checkpoint 往返（logits 逐位一致）', run: testCheckpoint },
+  { name: 'M6-3 DPO 偏好对齐（margin 上升 + 生成不回退）', run: testDpo },
 ];

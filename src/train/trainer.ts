@@ -110,6 +110,8 @@ export class Trainer
   private readonly inputTokens: GPUBuffer;
   private readonly inputPositions: GPUBuffer;
   private readonly targetsBuffer: GPUBuffer;
+  /** backward 的逐行 loss 权重（SFT mask / DPO 系数），每次 backward 前写入。 */
+  private readonly lossWeightsBuffer: GPUBuffer;
   private readonly uniformCache = new Map<string, GPUBuffer>();
 
   private readonly pEmbed: GPUComputePipeline;
@@ -169,6 +171,11 @@ export class Trainer
       size: alignTo( M * 4 ),
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     } );
+    this.lossWeightsBuffer = device.createBuffer( {
+      label: 'train-loss-weights',
+      size: alignTo( M * 4 ),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    } );
     this.dummyBias = device.createBuffer( {
       label: 'train-dummy-bias',
       size: alignTo( 64 * 4 ),
@@ -214,6 +221,37 @@ export class Trainer
     const p = this.param( name );
     if ( data.length !== p.length ) throw new Error( `writeParam ${ name }: 长度 ${ data.length } != ${ p.length }` );
     writeF32( this.device, p.buffer, 0, data );
+  }
+
+  /** 读回 AdamW 优化器状态（m/v），供 checkpoint 保存。 */
+  async readOptimizerState ( name: string ): Promise<{ m: Float32Array; v: Float32Array }>
+  {
+    const p = this.param( name );
+    const m = await readbackF32( this.device, p.m, 0, p.length );
+    const v = await readbackF32( this.device, p.v, 0, p.length );
+    return { m, v };
+  }
+
+  /** 写入 AdamW 优化器状态，供 checkpoint 加载后继续训练（heat-up 无需重复）。 */
+  writeOptimizerState ( name: string, m: Float32Array, v: Float32Array ): void
+  {
+    const p = this.param( name );
+    if ( m.length !== p.length || v.length !== p.length ) throw new Error( `writeOptimizerState ${ name }: 长度不匹配` );
+    writeF32( this.device, p.m, 0, m );
+    writeF32( this.device, p.v, 0, v );
+  }
+
+  /** 覆盖 AdamW 步数计数（checkpoint 恢复 bias correction 所需）。 */
+  setStepCount ( t: number ): void
+  {
+    if ( t < 0 ) throw new Error( `setStepCount: t=${ t }` );
+    this.t = t;
+  }
+
+  /** 所有注册参数的名字（checkpoint 遍历用）。 */
+  paramNames (): string[]
+  {
+    return [ ...this.params.keys() ];
   }
 
   async readGrad ( name: string ): Promise<Float32Array>
@@ -431,31 +469,68 @@ export class Trainer
     this.cache = { layers, finalX: x, lnf, logits };
   }
 
-  /** 对当前缓存的 logits 计算平均交叉熵（CPU 侧读回）。 */
-  async loss ( targets: Uint32Array ): Promise<number>
+  /** 对当前缓存的 logits 计算平均交叉熵（CPU 侧读回）。
+   *
+   * weights：逐行 loss 权重（可选）。
+   *   - 缺省：均匀 1/M，等价平均 CE（预训练语义）
+   *   - SFT：有效行 1/N、masked 行 0 —— 返回 Σw·ce/Σw
+   */
+  async loss ( targets: Uint32Array, weights?: Float32Array ): Promise<number>
+  {
+    const r = await this.weightedLossParts( targets, weights );
+    return r.loss;
+  }
+
+  /**
+   * 加权 CE 的两个分量：loss = Σw·ce / Σw。
+   * DPO 需要 Σw·ce 不除以 Σw 的形式（token logprob 之和），故拆开返回。
+   * weights 缺省时 w ≡ 1/M，Σw=1。
+   */
+  async weightedLossParts ( targets: Uint32Array, weights?: Float32Array ): Promise<{ loss: number; weightedSum: number; sumW: number }>
   {
     if ( !this.cache ) throw new Error( 'loss: 需先调用 forward' );
     const M = this.M;
     const V = this.config.vocabSize;
     if ( targets.length !== M ) throw new Error( `targets 长度 ${ targets.length } != B*T=${ M }` );
+    if ( weights !== undefined && weights.length !== M ) throw new Error( `weights 长度 ${ weights.length } != B*T=${ M }` );
     const logits = await readbackF32( this.device, this.cache.logits.buffer, 0, M * V );
-    let total = 0;
+    let weightedSum = 0;
+    let sumW = 0;
     for ( let m = 0; m < M; m++ )
     {
+      const w = weights ? weights[ m ] : 1 / M;
+      if ( w === 0 ) continue;
       const base = m * V;
       let mx = -Infinity;
       for ( let v = 0; v < V; v++ ) mx = Math.max( mx, logits[ base + v ] );
       let sum = 0;
       for ( let v = 0; v < V; v++ ) sum += Math.exp( logits[ base + v ] - mx );
-      total += mx + Math.log( sum ) - logits[ base + targets[ m ] ];
+      weightedSum += w * ( mx + Math.log( sum ) - logits[ base + targets[ m ] ] );
+      sumW += w;
     }
-    return total / M;
+    return { loss: weightedSum / sumW, weightedSum, sumW };
+  }
+
+  /** 读回当前缓存的 logits（M×V，供 DPO 逐行 token logprob 等训练逻辑使用）。 */
+  async readLogits (): Promise<Float32Array>
+  {
+    if ( !this.cache ) throw new Error( 'readLogits: 需先调用 forward' );
+    const lg = this.cache.logits;
+    return readbackF32( this.device, lg.buffer, lg.offset / 4, lg.length );
   }
 
   // ---------------------------------------------------------------- 反向
 
-  /** 执行一次完整反向，把所有参数梯度写入各自的 grad buffer。 */
-  backward ( targets: Uint32Array ): void
+  /**
+   * 执行一次完整反向，把所有参数梯度写入各自的 grad buffer。
+   *
+   * weights：逐行 loss 权重（可选，与 loss() 同语义）。
+   *   - 缺省：均匀 1/M（预训练）
+   *   - SFT：masked 行 0（prompt 不计梯度）
+   *   - DPO：chosen/rejected 行传 ±β 系数 —— 把标量 loss 对 token-logprob
+   *     之和的梯度折进 CE 反向，其余链式传播完全复用
+   */
+  backward ( targets: Uint32Array, weights?: Float32Array ): void
   {
     const cfg = this.config;
     const C = cfg.nEmbd;
@@ -469,8 +544,12 @@ export class Trainer
 
     if ( !this.cache ) throw new Error( 'backward: 需先调用 forward' );
     if ( targets.length !== M ) throw new Error( `targets 长度 ${ targets.length } != B*T=${ M }` );
+    if ( weights !== undefined && weights.length !== M ) throw new Error( `weights 长度 ${ weights.length } != B*T=${ M }` );
     const cache = this.cache;
 
+    // 默认均匀 1/M（预训练语义）；SFT/DPO 由调用方按行给出
+    const w = weights ?? new Float32Array( M ).fill( 1 / M );
+    writeF32( this.device, this.lossWeightsBuffer, 0, w );
     writeU32( this.device, this.targetsBuffer, 0, targets );
     // wpe 梯度仅有 embedding 一条路径（就地累加），必须先清零；wte 由 gemm_tn 覆盖写。
     this.clearBuffers( [ this.param( 'wpe' ).grad ] );
@@ -484,7 +563,7 @@ export class Trainer
       p.u32( 0 );
       p.u32( 0 );
     } );
-    this.run( this.pCe, [ cache.logits, this.targetsBuffer, dlogits, uCe ], M );
+    this.run( this.pCe, [ cache.logits, this.targetsBuffer, this.lossWeightsBuffer, dlogits, uCe ], M );
 
     // --- lm_head（wte 共享）：dWte = dY^T @ lnf；dlnf = dY @ wte ---
     this.gemmTn( dlogits, cache.lnf, this.param( 'wte' ).grad, V, C, M );

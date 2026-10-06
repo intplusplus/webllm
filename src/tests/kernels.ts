@@ -846,7 +846,7 @@ async function testSumRows(gpu: GpuContext): Promise<string> {
   return `rows=${rows} cols=${cols}，${detail}`;
 }
 
-/** softmax + 交叉熵反向。 */
+/** softmax + 交叉熵反向（支持逐行权重：预训练 w≡1/M，SFT/DPO 用 0 与 ±β 系数）。 */
 async function testCeSoftmaxBwd(gpu: GpuContext): Promise<string> {
   const M = 4;
   const V = 11;
@@ -854,24 +854,31 @@ async function testCeSoftmaxBwd(gpu: GpuContext): Promise<string> {
   const logits = randomF32(M * V, rng);
   const targets = new Uint32Array(M);
   for (let i = 0; i < M; i++) targets[i] = Math.floor(rng() * V);
+  // 预训练语义：w ≡ 1/M（平均 CE）；另验证 w=0 的 masked 行输出全 0
+  const weights = new Float32Array(M).fill(1 / M);
+  weights[2] = 0.0;
   const device = gpu.device;
   const bufL = createStorageBuffer(device, M * V * 4);
   const bufT = createStorageBuffer(device, M * 4);
+  const bufW = createStorageBuffer(device, M * 4);
   const bufOut = createStorageBuffer(device, M * V * 4);
   writeF32(device, bufL, 0, logits);
   writeU32(device, bufT, 0, targets);
+  writeF32(device, bufW, 0, weights);
   const u = new StructPacker();
   u.u32(M); u.u32(V); u.u32(0); u.u32(0);
   const d = createUniform(device, u.bytes());
   const p = createComputePipeline(device, ceSoftmaxBwdWgsl);
   dispatch(device, p, device.createBindGroup({
     layout: p.getBindGroupLayout(0),
-    entries: [bufL, bufT, bufOut, d].map((b, i) => ({ binding: i, resource: { buffer: b } })),
+    entries: [bufL, bufT, bufW, bufOut, d].map((b, i) => ({ binding: i, resource: { buffer: b } })),
   }), M);
   const got = await readbackF32(device, bufOut, 0, M * V);
-  const detail = assertClose(got, ref.ceSoftmaxBwdRef(logits, M, V, targets), 1e-4, 'ce_bwd');
-  [bufL, bufT, bufOut, d].forEach((b) => b.destroy());
-  return `M=${M} V=${V}，${detail}`;
+  const want = ref.ceSoftmaxBwdRef(logits, M, V, targets);
+  for (let v = 0; v < V; v++) want[2 * V + v] = 0.0; // masked 行
+  const detail = assertClose(got, want, 1e-4, 'ce_bwd');
+  [bufL, bufT, bufW, bufOut, d].forEach((b) => b.destroy());
+  return `M=${M} V=${V}（含 masked 行），${detail}`;
 }
 
 /** 词嵌入反向（累加到已有 dW）。 */
