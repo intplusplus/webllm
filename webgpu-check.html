@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>WebGPU 环境探测</title>
+<style>
+  body { font-family: ui-monospace, Consolas, monospace; background:#0b0e14; color:#c9d1d9; padding:24px; }
+  h1 { font-size:18px; }
+  pre { background:#11151c; padding:16px; border-radius:8px; white-space:pre-wrap; line-height:1.6; }
+  .ok { color:#3fb950; } .bad { color:#f85149; } .warn { color:#d29922; }
+</style>
+</head>
+<body>
+<h1>WebGPU 环境探测</h1>
+<pre id="out">检测中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+function log(s){ lines.push(s); out.textContent = lines.join('\n'); }
+
+(async () => {
+  log('UserAgent: ' + navigator.userAgent);
+  if (!('gpu' in navigator)) {
+    log('%c[FAIL] navigator.gpu 不存在：当前浏览器不支持 WebGPU。');
+    document.title = 'WEBGPU=NO';
+    return;
+  }
+  log('[OK] navigator.gpu 存在');
+
+  let adapter;
+  try {
+    adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  } catch (e) {
+    log('[FAIL] requestAdapter 抛错: ' + e.message);
+  }
+  if (!adapter) {
+    log('[FAIL] 未获取到 adapter（可能被驱动/浏览器策略禁用）');
+    document.title = 'WEBGPU=NO';
+    return;
+  }
+  log('[OK] 获取到 adapter');
+
+  const info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {});
+  log('');
+  log('--- 适配器信息 ---');
+  log('vendor      : ' + (info.vendor || '(未知)'));
+  log('architecture: ' + (info.architecture || '(未知)'));
+  log('device      : ' + (info.device || '(未知)'));
+  log('description : ' + (info.description || '(未知)'));
+  log('isFallback  : ' + (adapter.isFallbackAdapter === true ? '是(软件模拟,很慢)' : '否'));
+
+  log('');
+  log('--- 关键限制 (limits) ---');
+  const L = adapter.limits;
+  const fmt = b => (b/1024/1024/1024).toFixed(2) + ' GiB (' + b.toLocaleString() + ' B)';
+  log('maxBufferSize                  : ' + fmt(L.maxBufferSize));
+  log('maxStorageBufferBindingSize    : ' + fmt(L.maxStorageBufferBindingSize));
+  log('maxComputeWorkgroupStorageSize : ' + L.maxComputeWorkgroupStorageSize + ' B');
+  log('maxComputeInvocationsPerWG     : ' + L.maxComputeInvocationsPerWorkgroup);
+  log('maxComputeWorkgroupsPerDim     : ' + L.maxComputeWorkgroupsPerDimension);
+  log('maxBindGroups                  : ' + L.maxBindGroups);
+
+  log('');
+  log('--- 特性 (features) ---');
+  const feats = [...adapter.features];
+  log(feats.length ? feats.join(', ') : '(无额外特性)');
+  log('shader-f16 支持: ' + (adapter.features.has('shader-f16') ? '是 (可用 fp16 加速)' : '否 (只能用 fp32)'));
+
+  // 实际申请一块大 buffer，测试真实可用显存
+  log('');
+  log('--- 实际可分配显存测试 ---');
+  const device = await adapter.requestDevice().catch(e => { log('[FAIL] requestDevice: ' + e.message); return null; });
+  if (device) {
+    log('[OK] requestDevice 成功');
+    for (const gib of [0.5, 1, 2, 3, 4, 6]) {
+      const bytes = Math.floor(gib * 1024*1024*1024);
+      if (bytes > L.maxBufferSize) { log('  ' + gib + ' GiB: 超过 maxBufferSize，跳过'); continue; }
+      try {
+        const buf = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        log('  ' + gib + ' GiB 单块 buffer: 分配成功');
+        buf.destroy();
+      } catch (e) {
+        log('  ' + gib + ' GiB 单块 buffer: 失败 (' + e.message + ')');
+      }
+    }
+  }
+
+  log('');
+  log('=== 结论 ===');
+  log('WebGPU 可用: 是');
+  document.title = 'WEBGPU=YES';
+})().catch(e => { log('[FATAL] ' + (e && e.stack || e)); document.title = 'WEBGPU=ERROR'; });
+</script>
+</body>
+</html>

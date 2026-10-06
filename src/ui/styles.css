@@ -1,0 +1,110 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0e14;
+  --panel: #141a23;
+  --border: #232b38;
+  --text: #c9d1d9;
+  --muted: #7d8796;
+  --ok: #3fb950;
+  --bad: #f85149;
+  --accent: #58a6ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+#app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+header h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+  color: var(--accent);
+}
+
+header .sub {
+  margin: 0 0 24px;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+
+.card h2 {
+  font-size: 14px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+pre.mono {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+pre.bad {
+  color: var(--bad);
+}
+
+ul.tests {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+ul.tests li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #0f141c;
+  border: 1px solid var(--border);
+}
+
+ul.tests li .tag {
+  font-weight: 700;
+  min-width: 46px;
+}
+
+ul.tests li.pass .tag {
+  color: var(--ok);
+}
+
+ul.tests li.fail .tag {
+  color: var(--bad);
+}
+
+ul.tests li .name {
+  flex: 1;
+}
+
+ul.tests li .detail {
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}

@@ -1,0 +1,32 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 模型权重：438MB，不入版本库，用 `npm run fetch:model` 下载
+# 见 scripts/fetch-model.mjs
+public/models/**/*.safetensors
+public/models/**/*.bin
+public/models/**/*.gguf
+
+# tokenizer 的遗留文件：bpe.ts 只读 tokenizer.json，这两个是 HF 旧格式冗余副本
+public/models/**/vocab.json
+public/models/**/merges.txt
+
+# IDE / 编辑器私有目录
+.trae/
+.vscode/
+.idea/
+
+# 本地环境与日志
+.env
+.env.local
+*.local
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# 系统缓存
+.cache/
+.vite/
