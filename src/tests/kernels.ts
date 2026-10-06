@@ -45,6 +45,7 @@ import embeddingF16Wgsl from '../gpu/kernels/embedding_f16.wgsl?raw';
 import gemmGemvF16Wgsl from '../gpu/kernels/gemm_gemv_f16.wgsl?raw';
 import gemmGemvSplitF16Wgsl from '../gpu/kernels/gemm_gemv_split_f16.wgsl?raw';
 import gemmGemvSplitReduceWgsl from '../gpu/kernels/gemm_gemv_split_reduce.wgsl?raw';
+import { testDecodeProfile } from './profile-decode';
 
 export interface TestResult {
   name: string;
@@ -1505,4 +1506,5 @@ export const kernelTests: SelfTest[] = [
   { name: 'M4-3 embedding_f16（f16 词嵌入查表）', run: testEmbeddingF16 },
   { name: 'M5 gemm_gemv_f16（解码 M=1 专用 + 对比通用 GEMM）', run: testGemmGemvF16 },
   { name: 'M5 gemm_gemv_split_f16（split-K 解码 + 归约对拍）', run: testGemmGemvSplitF16 },
+  { name: 'M5 解码瓶颈剖析（timestamp-query 逐 pass 耗时）', run: testDecodeProfile },
 ];

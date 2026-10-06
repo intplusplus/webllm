@@ -12,7 +12,7 @@ import {
     writeU32,
     type Tensor,
 } from '../gpu/buffer';
-import { CommandBatch, createComputePipeline, dispatch } from '../gpu/pipeline';
+import { CommandBatch, createBatchProfile, createComputePipeline, dispatch, type BatchProfile } from '../gpu/pipeline';
 import { qwenHeadDim, qwenKvDim, type QwenConfig } from './qwen-config';
 
 import embeddingF16Wgsl from '../gpu/kernels/embedding_f16.wgsl?raw';
@@ -155,6 +155,8 @@ export class QwenGpt
      * encoder，pass 边界表达读写依赖，最后只 submit 一次。
      */
     private batch: CommandBatch | null = null;
+    /** 一次性剖析（timestamp-query）：若非空，下一次 runForward 逐 pass 计时。 */
+    private pendingProfile: BatchProfile | null = null;
 
     constructor ( gpu: GpuContext, config: QwenConfig, maxBatch = 1 )
     {
@@ -378,6 +380,7 @@ export class QwenGpt
         // 同一 pass 内的 dispatch 之间不得存在对同一 buffer 的 RAW / WAR / WAW。
         // 每层 12 个 pass / 17 次 dispatch（cache 路径），24 层 + 头尾 ≈ 291 pass。
         this.batch = new CommandBatch( this.device );
+        if ( this.pendingProfile ) this.batch.enableProfile( this.pendingProfile );
         try
         {
             // --- 嵌入（无位置嵌入，位置信息由 RoPE 注入） ---
@@ -488,7 +491,20 @@ export class QwenGpt
             const batch = this.batch;
             this.batch = null;
             batch.submit();
+            this.pendingProfile = null;
         }
+    }
+
+    /**
+     * 给下一次 forward/prefill/decodeStep 开启逐 pass 剖析（timestamp-query）。
+     * 返回的句柄在该次前向 submit 后可用 readBatchProfile 读回每 pass 耗时；
+     * 用完调用方负责 destroy() 资源。需要 timestamp-query feature。
+     */
+    profileNextForward ( maxPasses = 512 ): BatchProfile
+    {
+        if ( this.pendingProfile ) throw new Error( '上一次剖析尚未消费' );
+        this.pendingProfile = createBatchProfile( this.device, maxPasses );
+        return this.pendingProfile;
     }
 
     async readTensor ( t: Tensor ): Promise<Float32Array>

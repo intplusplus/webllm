@@ -55,9 +55,16 @@ export function dispatch(
 export class CommandBatch {
   private readonly encoder: GPUCommandEncoder;
   private pass: GPUComputePassEncoder | null = null;
+  private profile: BatchProfile | null = null;
 
   constructor(private readonly device: GPUDevice) {
     this.encoder = device.createCommandEncoder();
+  }
+
+  /** 开启剖析：之后每个 pass 都会写一对时间戳。必须在第一次 dispatch 前调用。 */
+  enableProfile(profile: BatchProfile): void {
+    if (this.pass) throw new Error('enableProfile 必须在首次 dispatch 之前调用');
+    this.profile = profile;
   }
 
   /** 往当前 pass 追加一次 dispatch；pass 尚未开启时会自动开启。 */
@@ -68,7 +75,18 @@ export class CommandBatch {
   ): void {
     let pass = this.pass;
     if (!pass) {
-      pass = this.encoder.beginComputePass();
+      let ts: GPUComputePassTimestampWrites | undefined;
+      if (this.profile) {
+        const p = this.profile;
+        if (p.passCount >= p.maxPasses) throw new Error(`剖析 pass 数超出上限 ${ p.maxPasses }`);
+        ts = {
+          querySet: p.querySet,
+          beginningOfPassWriteIndex: p.passCount * 2,
+          endOfPassWriteIndex: p.passCount * 2 + 1,
+        };
+        p.passCount++;
+      }
+      pass = this.encoder.beginComputePass(ts ? { timestampWrites: ts } : {});
       this.pass = pass;
     }
     pass.setPipeline(pipeline);
@@ -86,6 +104,58 @@ export class CommandBatch {
   /** 结束剩余 pass 并把整个 encoder 提交到队列（仅一次 submit）。 */
   submit(): void {
     this.endPass();
-    this.device.queue.submit([this.encoder.finish()]);
+    // resolve + 回拷必须在 encoder.finish() 之前编码；它们排在队列上
+    // kernel 之后，readBatchProfile 的 mapAsync 会等它们完成
+    if (this.profile) {
+      const p = this.profile;
+      this.encoder.resolveQuerySet(p.querySet, 0, p.passCount * 2, p.resolveBuffer, 0);
+      this.encoder.copyBufferToBuffer(p.resolveBuffer, 0, p.readBuffer, 0, p.passCount * 2 * 8);
+    }
+    const commandBuffer = this.encoder.finish();
+    this.device.queue.submit([commandBuffer]);
   }
+}
+
+/** 一次剖析会话的资源与状态。 */
+export interface BatchProfile {
+  querySet: GPUQuerySet;
+  resolveBuffer: GPUBuffer;
+  /** 时间戳单位为纳秒（Dawn 的 timestampPeriod 恒为 1）。 */
+  readBuffer: GPUBuffer;
+  /** 每个 pass 占 2 个 query（begin/end）。 */
+  maxPasses: number;
+  passCount: number;
+}
+
+/** 创建剖析资源：querySet + resolve/read 缓冲。用完必须 destroy()。 */
+export function createBatchProfile(device: GPUDevice, maxPasses: number): BatchProfile {
+  const querySet = device.createQuerySet({ type: 'timestamp', count: maxPasses * 2 });
+  const size = maxPasses * 2 * 8;
+  const resolveBuffer = device.createBuffer({
+    size,
+    usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+  });
+  const readBuffer = device.createBuffer({
+    size,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  return { querySet, resolveBuffer, readBuffer, maxPasses, passCount: 0 };
+}
+
+/** 提交剖析批后调用：等待并读回每 pass 的耗时（纳秒，长度 = passCount）。 */
+export async function readBatchProfile(
+  device: GPUDevice,
+  profile: BatchProfile,
+): Promise<BigInt64Array> {
+  await device.queue.onSubmittedWorkDone();
+  await profile.readBuffer.mapAsync(GPUMapMode.READ);
+  const raw = new BigInt64Array(profile.readBuffer.getMappedRange().slice(0));
+  profile.readBuffer.unmap();
+  const out = new BigInt64Array(profile.passCount);
+  for (let i = 0; i < profile.passCount; i++) {
+    // begin/end 差值；异常负值按 0 处理
+    const delta = raw[i * 2 + 1] - raw[i * 2];
+    out[i] = delta > 0n ? delta : 0n;
+  }
+  return out;
 }
