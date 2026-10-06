@@ -141,6 +141,10 @@ interface TrainEngine {
 - 信令服务器刻意**不引入 `ws` 依赖**，用 Node 原生 `http`+`crypto` 手写 RFC 6455。
   理由：约 200 行、可全文审计、离线可用 —— 这对「公共产品」的信任定位是加分项。
   （这条链路有独立自检：`npm run verify:signal`，7 项全过，含跨 64KB 长帧。）
+- **传输层被抽象成 `Transport` 接口，有两套实现**：WebRTC（跨设备，需信令）
+  与 BroadcastChannel（同浏览器多标签页，零服务器）。这不是顺手加的兼容层 ——
+  它让「编排逻辑」可以在 Node 里用两个 `FedNode` 实例完整测试（`npm run verify:e2e`），
+  否则最核心的开轮/校验/聚合流程就只能靠肉眼看界面，无法回归。**可测性是设计出来的，不是补出来的。**
 
 ### 3.3 聚合策略演进
 
@@ -412,9 +416,27 @@ LoRA 增量只有原模型的百分之几，交换量从 MB 级降到几十 KB�
 → 联邦 2.824 < 独训均值 2.979   ← 联邦确实优于各自独训
 ```
 
+端到端测试 `npm run verify:e2e`，16/16 通过 —— **三个 FedNode 真跑一遍完整编排**
+（开轮 → 本地训练 → 上报 → 探针校验 → FedAvg → 广播 → 账本 → 模型卡），
+其中**第三个节点是故意作弊的**（从第 2 轮起把自报 probeLoss 抬高 1.0）：
+
+```
+r1  主机        自报 3.6499  份额  33%  通过
+r1  好节点      自报 3.4840  份额  33%  通过
+r1  作弊节点    自报 3.6858  份额  33%  通过      ← 第 1 轮老实
+r2  主机        自报 3.4281  份额  50%  通过
+r2  好节点      自报 3.3801  份额  50%  通过
+r2  作弊节点    自报 4.3851  份额   0%  异常·剔除  ← 探针复算 3.3851 ≠ 自报 4.3851（Δ=1.0000）
+r3  ...同上，作弊节点继续被剔除
+```
+
+**这就是信任层 v0 的实证**：谎报被当场抓出、剔除，聚合范围随之收缩，
+其余节点照常收敛到同一份全局权重（三节点 weightsDigest 一致）。
+
 其它验证：权重帧 54,300 字节逐位无损往返、篡改 1 字节即被摘要拦下、
 同 seed 初始权重逐位一致、探针评估两次结果完全相等、分片拼回等于原文。
-信令链路 `npm run verify:signal` 7/7 通过。
+信令链路 `npm run verify:signal` 7/7 通过（含跨 64KB 长帧）。
+`npm run typecheck` 0 错误，`vite build` 产出 index.html + fed.html。
 
 ---
 
@@ -468,20 +490,26 @@ LoRA 增量只有原模型的百分之几，交换量从 MB 级降到几十 KB�
 | `src/fed/protocol.ts` | 房间清单 / 控制帧类型 / 权重帧编解码 / FedAvg / 摘要 |
 | `src/fed/engine.ts` | `TrainEngine` 抽象 + 纯 JS 小模型引擎（含反向与 AdamW） |
 | `src/fed/corpus.ts` | 语料加载 / 字符表 / 分片 / 贡献数据过滤 |
-| `src/fed/transport.ts` | WebRTC 网状连接 + 信令客户端 |
+| `src/fed/transport.ts` | `Transport` 接口 + WebRTC 网状连接 + 信令客户端 |
+| `src/fed/bus.ts` | `LocalBus`：BroadcastChannel 本机多标签页通道，**零服务器** |
 | `src/fed/node.ts` | 联邦训练编排：开轮 / 校验 / 聚合 / 账本 / 模型卡 |
 | `src/fed/selfcheck.ts` | 核心逻辑的无头自检（16 项） |
+| `src/fed/e2e.ts` | 三节点端到端测试，含一个故意作弊的节点（16 项） |
 | `src/ui/fed-app.ts` + `src/ui/fed.css` | Demo 界面 |
 | `fed.html` + `src/fed-main.ts` | Demo 入口 |
 | `scripts/signal-server.mjs` | 零依赖信令服务器 |
 | `scripts/start-demo.mjs` | 一键启动（信令 + dev server + 打印局域网地址） |
-| `scripts/verify-fed.mjs` / `scripts/verify-signal.mjs` | 两套自检 |
+| `scripts/verify-fed.mjs` / `verify-e2e.mjs` / `verify-signal.mjs` | 三套自检 |
 
 跑起来：
 
 ```bash
 npm install
-npm run demo        # 一键起信令 + dev server，并打印手机可用的局域网地址
+npm run demo            # 一键起信令 + dev server，并打印手机可用的局域网地址
 npm run verify:fed      # 联邦训练核心自检（16 项）
+npm run verify:e2e      # 三节点端到端测试（16 项，含作弊节点）
 npm run verify:signal   # 信令链路自检（7 项）
 ```
+
+> 想立刻看到效果又不想起服务：选「本机多标签页」这种联机方式，
+> 同一个浏览器开两个标签页、填同一个房间 ID 即可开始联训（BroadcastChannel，零服务器）。
