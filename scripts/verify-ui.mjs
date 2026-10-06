@@ -71,11 +71,14 @@ async function runScenario ( { name, query, base, cdpPort, shotPrefix } )
     await waitFor( host, statusHas( '房间已创建' ), 30000, `${ name } 主机建房` );
 
     await clickButton( peer, '加入房间' );
+    // 注意：清单**不再**在建房时下发 —— 这是本轮的核心改动。
+    // 房主要等点了「开始训练」、按全网能力协商出引擎之后才统一下发，
+    // 所以节点这里只能等「已加入、在等房主」。等「清单指纹」会永远等不到。
     await waitFor(
       peer,
-      `(() => { const t = document.body.innerText; return t.includes( '清单指纹' ) && !t.includes( '尚未加入任何房间' ); })()`,
+      statusHas( '等待房主下发任务' ),
       40000,
-      `${ name } 节点收到清单`,
+      `${ name } 节点已加入`,
     );
 
     const rosterSeen = await waitFor(
@@ -104,6 +107,14 @@ async function runScenario ( { name, query, base, cdpPort, shotPrefix } )
       `含「安全上下文」=${ hostText.includes( '安全上下文' ) }，含「适配器」=${ hostText.includes( '适配器' ) }` );
 
     check( `[${ name }] 主机创建房间并看到节点`, rosterSeen, `主机节点表可见=${ rosterSeen }` );
+
+    check( `[${ name }] 房主按全网能力协商引擎`,
+      /引擎协商结果/.test( hostText ),
+      `日志含「引擎协商结果」=${ /引擎协商结果/.test( hostText ) }` );
+
+    check( `[${ name }] 节点在开训时才收到房主下发的清单`,
+      peerText.includes( '清单指纹' ) && !peerText.includes( '尚未加入任何房间' ),
+      `节点含「清单指纹」=${ peerText.includes( '清单指纹' ) }，仍显示未加入=${ peerText.includes( '尚未加入任何房间' ) }` );
 
     check( `[${ name }] 主机完成训练并生成模型卡`,
       hostStatus.includes( '训练完成' ) && hostText.includes( '传输总量' ) && hostText.includes( '探针 loss' ),

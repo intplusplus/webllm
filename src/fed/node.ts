@@ -26,7 +26,7 @@
 import type { Corpus } from './corpus';
 import { buildStoi, encodeTo, filterToVocab, shardText } from './corpus';
 import { createEngine, type TrainEngine } from './engine';
-import { detectKind } from './capability';
+import { detectKind, gpuIfReady } from './capability';
 import {
   aggregateGlobal,
   decodeWeights,
@@ -36,6 +36,7 @@ import {
   weightsDigest,
   type AggregateState,
   type ControlMessage,
+  type EngineId,
   type LedgerEntry,
   type NamedWeights,
   type RoomManifest,
@@ -47,8 +48,11 @@ import type { PeerInfo, Transport } from './transport';
 const PROBE_EVAL_COUNT = 256;
 const VERIFY_TOL = 1e-3;
 const ROUND_TIMEOUT_MS = 30000;
-/** 首次连接要多等一会儿：手机加入 + 首次编译 WGSL 都不快。 */
-const FIRST_ROUND_TIMEOUT_MS = 60000;
+/**
+ * 开训前的「就绪」窗口。房主下发任务后等每个节点回 ready。
+ * 手机首次编译 WGSL 不慢（实测 6 轮 6 秒量级），25 秒足够宽松。
+ */
+const READY_TIMEOUT_MS = 25000;
 
 export interface ModelCard
 {
@@ -100,6 +104,14 @@ export interface NodeOptions
   contributionText: string;
   /** 仅 host：本地构建的清单 */
   manifest?: RoomManifest;
+  /**
+   * 仅房主：引擎策略。
+   *   `auto` —— 全网每台设备都拿得到 WebGPU 适配器才用 GPU，只要有一个不行就回退 CPU
+   *   `cpu`  —— 一律 CPU（兼容性最好）
+   * 真正的抉择发生在开训那一刻，由 negotiateEngine 依据**全网**能力做，
+   * 而不是建房时凭房主一己之力拍脑袋。
+   */
+  enginePolicy?: 'auto' | 'cpu';
 }
 
 interface Submission
@@ -116,6 +128,7 @@ export class FedNode
 {
   private readonly o: NodeOptions;
   private readonly stoi: Map<string, number>;
+  private readonly enginePolicy: 'auto' | 'cpu';
 
   /** 引擎在清单确定后构造：host 在构造期，peer 收到 assign 时。 */
   private engine!: TrainEngine;
@@ -137,8 +150,22 @@ export class FedNode
   private rosterMap = new Map<string, PeerInfo>();
   private hostId: string | null = null;
   private assignCounter = 0;
-  /** 每个节点被分到的数据分片。记住它，好在每轮开头重发 assign（同一条分片）。 */
+  /** 每个节点被分到的数据分片。记住它，这样重发 assign 时用的是同一片。 */
   private readonly assignedShards = new Map<string, number>();
+
+  // ---- 开训前的协调状态（房主侧）----
+  /**
+   * 房间已开训。之后加入的节点一律拒绝并说明原因 ——
+   * 否则会出现「房主已经在跑第 3 轮、手机刚到第 1 轮」这种错位。
+   */
+  private sealed = false;
+  private currentRound = 0;
+  /** 已确认「模型建好、随时能训」的节点 */
+  private readonly readyPeers = new Set<string>();
+  /** 明确回了不可用的节点 → 原因 */
+  private readonly notReady = new Map<string, string>();
+  /** 训练中反复无响应的节点：只容忍一次，之后不再为它空等 */
+  private readonly offlinePeers = new Set<string>();
 
   private startedAt = 0;
   private running = false;
@@ -152,6 +179,7 @@ export class FedNode
   {
     this.o = opts;
     this.manifest = opts.manifest ?? null;
+    this.enginePolicy = opts.enginePolicy ?? 'auto';
     this.stoi = buildStoi( opts.corpus.vocab );
     if ( this.manifest ) this.adoptManifest( this.manifest, 0 );
   }
@@ -163,6 +191,13 @@ export class FedNode
   get ledgerEntries (): LedgerEntry[] { return this.ledger; }
   get selfId (): string { return this.o.transport.selfId; }
   get engineRef () { return this.engine; }
+  /** 房间是否已开训（开训后加入的节点会被拒）。 */
+  get isSealed (): boolean { return this.sealed; }
+  get openedRound (): number { return this.currentRound; }
+  /** 已确认可用的节点 id。 */
+  get readyIds (): string[] { return [ ...this.readyPeers ]; }
+  /** 未就绪的节点 → 原因（界面直接展示，别让它变成黑箱）。 */
+  get notReadyReasons (): Map<string, string> { return this.notReady; }
 
   // ---------------------------------------------------------------- 装配
 
@@ -212,27 +247,36 @@ export class FedNode
       switch ( msg.t )
       {
         case 'assign':
-          if ( !this.manifest )
+          if ( this.manifest )
           {
-            try
-            {
-              this.adoptManifest( msg.manifest, msg.shardIndex );
-              this.o.events.onStatus( '已收到任务分配，等待主机开轮…' );
-            }
-            catch ( err )
-            {
-              // 最常见的失败：房间用 WebGPU 引擎，而本机没有可用的 WebGPU。
-              // 权重形状不同，没法混训 —— 必须说清楚该怎么办，不能只抛个异常。
-              const detail = ( err as Error ).message;
-              this.o.events.onStatus( `无法加入房间：${ detail }` );
-              this.o.events.onLog(
-                `收到任务分配，但本机构造模型失败：${ detail }。` +
-                '房间的引擎对全网必须一致，因此本机无法参与 —— 请让主机把「训练引擎」改成「只用 CPU」重建房间。',
-              );
-            }
+            // 重发的 assign（房主等就绪时会补发）：模型早就建好了，补回一次 ready 就行
+            this.sendReady( true );
+            break;
+          }
+          try
+          {
+            this.adoptManifest( msg.manifest, msg.shardIndex );
+            this.sendReady( true );
+            this.o.events.onStatus( '任务已收到、模型已建好，等待房主开轮…' );
+          }
+          catch ( err )
+          {
+            // 最常见的失败：房间用 WebGPU 引擎，而本机没有可用的 WebGPU。
+            // 权重形状不同，根本没法混训 —— 所以必须把原因回报房主，
+            // 而不是自己报个错就算完（房主据此把它排除，而不是每轮白等超时）。
+            const detail = ( err as Error ).message;
+            this.sendReady( false, detail );
+            this.o.events.onStatus( `本机无法参与本次训练：${ detail }` );
+            this.o.events.onLog( `收到任务，但本机构造模型失败：${ detail }。已回报房主。` );
           }
           break;
+        case 'busy':
+          this.o.events.onStatus( `房间已锁定（房主正在第 ${ msg.round } 轮训练），本机未参与` );
+          this.o.events.onLog( '加入得太晚了：房主已经锁定房间开始训练。请等这一轮结束后，让房主重新创建房间再加入。' );
+          break;
         case 'round/open':
+          // 没有清单 = 本机没被纳入本次训练，不要跟着跑
+          if ( !this.manifest ) break;
           void this.peerRound( msg.round );
           break;
         case 'round/close':
@@ -254,7 +298,26 @@ export class FedNode
     if ( msg.t === 'credit' )
     {
       this.credits.set( msg.peerId, { chars: msg.chars, digest: msg.digest } );
-      this.o.events.onLog( `${ msg.peerId.slice( 0, 6 ) } 贡献数据 ${ msg.chars } 字符` );
+      this.o.events.onLog( `${ this.nameOf( msg.peerId ) } 贡献数据 ${ msg.chars } 字符` );
+      return;
+    }
+
+    if ( msg.t === 'ready' )
+    {
+      if ( msg.ok )
+      {
+        if ( !this.readyPeers.has( msg.peerId ) )
+        {
+          this.readyPeers.add( msg.peerId );
+          this.o.events.onLog( `${ this.nameOf( msg.peerId ) } 已就绪（引擎 ${ msg.engine }）` );
+        }
+      }
+      else if ( !this.notReady.has( msg.peerId ) )
+      {
+        this.notReady.set( msg.peerId, msg.reason ?? '节点自报无法构建模型' );
+        this.o.events.onLog( `${ this.nameOf( msg.peerId ) } 自报不可用：${ msg.reason ?? '未说明原因' }` );
+      }
+      this.o.events.onRoster( [ ...this.rosterMap.values() ], this.selfId );
     }
   }
 
@@ -308,7 +371,7 @@ export class FedNode
 
   onPeerOpen ( peerId: string ): void
   {
-    this.o.events.onLog( `P2P 通道就绪：${ peerId.slice( 0, 6 ) }` );
+    this.o.events.onLog( `P2P 通道就绪：${ this.nameOf( peerId ) }` );
     // 通道就绪会改变节点表里的「状态」列，必须重绘一次
     // （onRoster 只在成员变化时触发，早于通道打开，否则界面会一直显示"连接中"）
     this.o.events.onRoster( [ ...this.rosterMap.values() ], this.selfId );
@@ -318,8 +381,17 @@ export class FedNode
       this.announceCredit();
       return;
     }
-    // 主机：新节点一上线就下发任务分配
-    this.sendAssign( peerId );
+    // 房主侧：
+    // 已经开训之后才上线的节点直接拒绝 —— 否则就是「房主跑到第 3 轮、手机还停在第 0 轮」。
+    if ( this.sealed )
+    {
+      this.o.transport.sendControl( peerId, { t: 'busy', round: this.currentRound } satisfies ControlMessage );
+      this.o.events.onLog( `${ this.nameOf( peerId ) } 在开训后才加入，已告知本机未参与` );
+      return;
+    }
+    // 开训前上线的节点**先不下发任务**：任务要等房主点「开始训练」、
+    // 按全网能力协商出引擎之后，才统一下发。这是「房主调配」的关键。
+    this.o.events.onLog( `${ this.nameOf( peerId ) } 已加入，等待房主开始训练` );
   }
 
   onPeerClose ( peerId: string ): void
@@ -346,6 +418,32 @@ export class FedNode
       this.assignedShards.set( peerId, idx );
     }
     this.o.transport.sendControl( peerId, { t: 'assign', shardIndex: idx, manifest: m } );
+  }
+
+  /** 节点侧：回报「模型已建好 / 建不出来」。房主靠它决定谁能进训练。 */
+  private sendReady ( ok: boolean, reason?: string ): void
+  {
+    const target = this.hostId ?? this.o.transport.openPeerIds[ 0 ];
+    if ( !target ) return;
+    const msg: ControlMessage = {
+      t: 'ready',
+      peerId: this.selfId,
+      ok,
+      engine: this.manifest?.model.engine ?? 'mlp',
+      ...( reason ? { reason } : {} ),
+    };
+    this.o.transport.sendControl( target, msg );
+  }
+
+  /** 房间内的普通节点（不含房主自己）。 */
+  private hostPeers (): PeerInfo[]
+  {
+    return [ ...this.rosterMap.values() ].filter( ( p ) => p.role === 'peer' );
+  }
+
+  private nameOf ( peerId: string ): string
+  {
+    return this.rosterMap.get( peerId )?.name ?? peerId.slice( 0, 6 );
   }
 
   // ---------------------------------------------------------------- 本地训练
@@ -402,30 +500,77 @@ export class FedNode
 
   // ---------------------------------------------------------------- 主机主循环
 
-  async startHost (): Promise<void>
+  /**
+   * 房主开训 —— 整个「调配」过程都收敛在这里：
+   *
+   *   1. 按**全网**能力协商引擎（不是凭房主一己之力拍脑袋）
+   *   2. 用协商结果重建清单并下发（参数全部由房主定义）
+   *   3. 等每个节点回 ready（没回话的会补发 assign），只有确认能训的才纳入
+   *   4. 锁定房间，然后逐轮训练
+   *
+   * 为什么必须有第 3 步：没有它，房主只知道「对方连着」，不知道「对方训得动」，
+   * 于是只能靠每轮 30–60 秒超时去发现 —— 那正是「两边不同步 + 主机报超时」的成因。
+   *
+   * buildFinalManifest 由界面提供：参数与语料在界面手里，
+   * 编排层只负责「算出该用哪个引擎、以及为什么」。
+   */
+  async startHost (
+    buildFinalManifest: ( engine: EngineId, reason: string ) => RoomManifest,
+  ): Promise<void>
   {
-    if ( this.o.role !== 'host' ) throw new Error( 'startHost: 仅主机可用' );
-    if ( this.running || !this.manifest ) return;
+    if ( this.o.role !== 'host' ) throw new Error( 'startHost: 仅房主可用' );
+    if ( this.running || this.sealed ) return;
     this.running = true;
     this.stopped = false;
     this.startedAt = Date.now();
-    const m = this.manifest;
 
-    // 初始（未训练）模型基线
-    this.initialProbeLoss = await this.evalProbe();
-    this.o.events.onLog( `初始模型探针 loss = ${ this.initialProbeLoss.toFixed( 3 ) }（未训练的基线）` );
-    this.o.events.onLog(
-      `引擎 ${ m.model.engine } · 聚合 ${ m.aggregate.mode }` +
-      ( m.crossCheck ? ' · 交叉校验开' : ' · 交叉校验关（自用设备，省一轮评估）' ),
-    );
-    if ( m.aggregate.mode === 'diloco' )
+    const peers = this.hostPeers();
+
+    // ---- 1 + 2. 协商引擎并按结果重建清单 ----
+    const { engine, reason } = this.negotiateEngine( peers );
+    const m = buildFinalManifest( engine, reason );
+    this.adoptManifest( m, 0 );
+    this.o.events.onLog( `引擎协商结果：${ engine } —— ${ reason }` );
+
+    // ---- 3. 下发 + 等就绪 ----
+    this.o.events.onStatus( `房主已下发任务（${ engine }），等待 ${ peers.length } 个节点就绪…` );
+    for ( const p of peers ) this.sendAssign( p.peerId );
+    await this.waitReady( peers );
+
+    const ready = peers.filter( ( p ) => this.readyPeers.has( p.peerId ) );
+    const skipped = peers.filter( ( p ) => !this.readyPeers.has( p.peerId ) );
+    for ( const p of skipped )
     {
-      this.aggState.momentum = null; // 从零开始累积外层动量
+      this.o.events.onLog(
+        `${ p.name }（${ p.device.kind }）未纳入本次训练：${ this.notReady.get( p.peerId ) ?? '未就绪' }`,
+      );
     }
 
-    for ( const p of this.rosterMap.values() ) if ( p.role === 'peer' ) this.sendAssign( p.peerId );
+    // 房间里明明有节点、却一个都没就绪 —— 直接中止。
+    // 让房主自己跑完会制造「看起来在联训、其实手机全程没参与」的假象，
+    // 那种错位比明确失败更糟。
+    if ( ready.length === 0 && peers.length > 0 )
+    {
+      this.running = false;
+      this.o.events.onStatus( `已中止：${ peers.length } 个节点全部未能就绪` );
+      this.o.events.onLog(
+        '排查顺序：① 节点房间 ID 是否与房主一致；② 节点页面的状态栏/日志有没有报错；' +
+        '③ 节点是否点了「加入房间」。',
+      );
+      return;
+    }
 
-    this.o.events.onStatus( `主机启动：共 ${ m.rounds } 轮，每轮每节点本地 ${ m.localSteps } 步 × ${ m.batchSize } 序列` );
+    // ---- 4. 锁定房间 ----
+    this.sealed = true;
+    this.o.events.onRoster( [ ...this.rosterMap.values() ], this.selfId );
+    this.o.events.onStatus(
+      `房间已锁定：房主 + ${ ready.length } 个节点参与，共 ${ m.rounds } 轮` +
+      ( skipped.length > 0 ? ` · ${ skipped.length } 个节点未纳入` : '' ),
+    );
+
+    this.initialProbeLoss = await this.evalProbe();
+    this.o.events.onLog( `初始模型探针 loss = ${ this.initialProbeLoss.toFixed( 3 ) }（未训练的基线）` );
+    if ( m.aggregate.mode === 'diloco' ) this.aggState.momentum = null;
 
     try
     {
@@ -438,7 +583,7 @@ export class FedNode
     }
     catch ( err )
     {
-      this.o.events.onStatus( `主机循环中断：${ ( err as Error ).message }` );
+      this.o.events.onStatus( `房主循环中断：${ ( err as Error ).message }` );
     }
     finally
     {
@@ -446,28 +591,88 @@ export class FedNode
     }
   }
 
+  /**
+   * 引擎协商：取**能力下限**。
+   *
+   * 规则很简单 —— 只要房间里有一台设备跑不了 WebGPU，全网就用 CPU。
+   * 因为引擎必须全网一致（权重形状不同没法聚合），而 CPU 引擎在任何设备上都能跑，
+   * 所以「回退 CPU」永远安全；反过来则会让那台设备彻底出局。
+   *
+   * 判据用 `gpuOk`（真拿到适配器）而不是 `webgpu`（navigator.gpu 存在）：
+   * 后者在下述情况会骗人 —— 有接口但拿不到适配器（驱动旧 / chrome://gpu 里被禁 /
+   * 远程桌面里没有 GPU）。宁可保守。
+   */
+  private negotiateEngine ( peers: PeerInfo[] ): { engine: EngineId; reason: string }
+  {
+    if ( this.enginePolicy === 'cpu' )
+    {
+      return { engine: 'mlp', reason: '房主指定「只用 CPU」' };
+    }
+    if ( gpuIfReady() === null )
+    {
+      return { engine: 'mlp', reason: `房主本机（${ detectKind() }）没有可用的 WebGPU 适配器` };
+    }
+    const noGpu = peers.filter( ( p ) => p.device.gpuOk !== true );
+    if ( noGpu.length > 0 )
+    {
+      const who = noGpu.map( ( p ) => `${ p.name }（${ p.device.kind }）` ).join( '、' );
+      return { engine: 'mlp', reason: `${ who } 没有可用的 WebGPU 适配器 → 按能力下限全网回退 CPU` };
+    }
+    return { engine: 'gpu-tinygpt', reason: '全网所有设备都能用 WebGPU' };
+  }
+
+  /** 等节点就绪；没回话的每 5 秒补发一次 assign（覆盖页面刷新/首帧丢失）。 */
+  private async waitReady ( peers: PeerInfo[] ): Promise<void>
+  {
+    if ( peers.length === 0 ) return;
+    const settled = (): number =>
+      peers.filter( ( p ) => this.readyPeers.has( p.peerId ) || this.notReady.has( p.peerId ) ).length;
+
+    const deadline = performance.now() + READY_TIMEOUT_MS;
+    let nextNudge = performance.now() + 5000;
+    while ( performance.now() < deadline && !this.stopped && settled() < peers.length )
+    {
+      if ( performance.now() >= nextNudge )
+      {
+        for ( const p of peers )
+        {
+          if ( !this.readyPeers.has( p.peerId ) && !this.notReady.has( p.peerId ) ) this.sendAssign( p.peerId );
+        }
+        nextNudge = performance.now() + 5000;
+        this.o.events.onStatus( `等待节点就绪…（${ this.readyPeers.size }/${ peers.length }）` );
+      }
+      await sleep( 100 );
+    }
+
+    for ( const p of peers )
+    {
+      if ( !this.readyPeers.has( p.peerId ) && !this.notReady.has( p.peerId ) )
+      {
+        this.notReady.set( p.peerId, `就绪超时（${ READY_TIMEOUT_MS / 1000 } 秒内未回应）` );
+      }
+    }
+  }
+
   private async hostRound ( round: number ): Promise<void>
   {
     const m = this.manifest!;
     const t0 = performance.now();
+    this.currentRound = round;
     this.submissions.clear();
 
-    // 每轮开头重发一次 assign：幂等，但能救回「清单没送到」的节点 ——
-    // 比如节点在主机开轮之后才加入、或页面刷新过。已经拿到清单的节点会忽略它。
-    for ( const p of this.rosterMap.values() )
-    {
-      if ( p.role === 'peer' ) this.sendAssign( p.peerId );
-    }
+    // 只跟「开训前已确认就绪」且「训练中没掉线」的节点打交道。
+    // 未就绪的节点在开训前已经说明过原因了，不能再让它们每轮拖一次 30 秒超时 ——
+    // 那正是「房主显示手机超时」的来源。
+    const peers = this.hostPeers().filter(
+      ( p ) => this.readyPeers.has( p.peerId ) && !this.offlinePeers.has( p.peerId ),
+    );
 
     this.o.transport.broadcast( JSON.stringify( { t: 'round/open', round } satisfies ControlMessage ) );
 
     const mine = await this.localPhase( round );
     this.o.events.onStatus( `第 ${ round }/${ m.rounds } 轮 · 本机完成（loss ${ mine.meta.localLoss.toFixed( 3 ) }），等待节点上报…` );
 
-    const peers = [ ...this.rosterMap.values() ].filter( ( p ) => p.role === 'peer' );
-    // 第一轮给更长的窗口：手机建连 + 首次编译 WGSL 都不快
-    const budget = round === 1 ? FIRST_ROUND_TIMEOUT_MS : ROUND_TIMEOUT_MS;
-    const deadline = performance.now() + budget;
+    const deadline = performance.now() + ROUND_TIMEOUT_MS;
     while ( this.submissions.size < peers.length && performance.now() < deadline && !this.stopped )
     {
       await sleep( 120 );
@@ -485,11 +690,15 @@ export class FedNode
       const sub = this.submissions.get( p.peerId );
       if ( !sub || Object.keys( sub.weights ).length === 0 )
       {
+        // 容忍一次（网络抖动），但之后不再为它空等 —— 否则每轮都要白等 30 秒
+        this.offlinePeers.add( p.peerId );
         entries.push( {
           round, peerId: p.peerId, name: p.name, deviceKind: p.device.kind,
           samples: 0, tokens: 0, probeLoss: 0, localLoss: 0, deltaNorm: 0, share: 0,
-          verdict: 'timeout', note: '本轮未上报（超时或断连），已从聚合中剔除',
+          verdict: 'timeout',
+          note: '本轮未上报，已标为离线；后续轮次不再等待，避免每轮空等超时',
         } );
+        this.o.events.onLog( `${ p.name } 本轮未上报 → 标为离线，后续轮次不再等它` );
         continue;
       }
       const v = await this.verify( sub.meta, sub.weights );
@@ -498,6 +707,22 @@ export class FedNode
       {
         accepted.push( sub.weights );
         sizes.push( sub.meta.samples );
+      }
+    }
+
+    // 开训前就没就绪的节点：只在第 1 轮记一条，把原因留在账本里，
+    // 这样模型卡能解释「为什么这次只有两台机器在训」。
+    if ( round === 1 )
+    {
+      for ( const p of this.hostPeers() )
+      {
+        if ( this.readyPeers.has( p.peerId ) ) continue;
+        entries.push( {
+          round, peerId: p.peerId, name: p.name, deviceKind: p.device.kind,
+          samples: 0, tokens: 0, probeLoss: 0, localLoss: 0, deltaNorm: 0, share: 0,
+          verdict: 'timeout',
+          note: `未纳入本次训练：${ this.notReady.get( p.peerId ) ?? '未就绪' }`,
+        } );
       }
     }
 

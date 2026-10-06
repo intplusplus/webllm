@@ -63,12 +63,19 @@ function shardOf ( corpus: Corpus, manifest: RoomManifest, index: number ): stri
   return `${ start.toLocaleString() } – ${ end.toLocaleString() }`;
 }
 
-function detectDevice (): DevCap
+/**
+ * 本机能力快照 —— 它会被上传到房间，**房主据此协商全网引擎**。
+ * 所以 `gpuOk` 必须如实：有 `navigator.gpu` 不代表拿得到适配器，
+ * 而房主只会认 `gpuOk`。拿不准就当 false（最坏结果是全网跑 CPU，不会出错）。
+ */
+function detectDevice ( cap: Capability | null ): DevCap
 {
   const nav = navigator as Navigator & { deviceMemory?: number };
   return {
     kind: detectKind(),
     webgpu: typeof navigator.gpu !== 'undefined',
+    gpuOk: cap?.adapterOk ?? false,
+    secureContext: cap?.secureContext ?? window.isSecureContext,
     cores: nav.hardwareConcurrency ?? 0,
     memoryGB: nav.deviceMemory ?? 0,
     ua: navigator.userAgent,
@@ -157,13 +164,17 @@ export function renderFedApp ( root: HTMLElement ): void
   const rowName = el( 'div', 'fed-row' );
   rowName.append( el( 'label', undefined, '我的名字' ) );
   const inName = el( 'input', 'fed-input' ) as HTMLInputElement;
-  inName.value = detectDevice().kind === 'Android' || detectDevice().kind === 'iOS' ? '我的手机' : '我的电脑';
+  {
+    // 默认名字按设备类型猜一个，省用户一步
+    const kind = detectDevice( null ).kind;
+    inName.value = kind === 'Android' || kind === 'iOS' ? '我的手机' : '我的电脑';
+  }
   rowName.append( inName );
   cardConnect.append( rowName );
 
   const devInfo = el( 'p', 'hint' );
   {
-    const d = detectDevice();
+    const d = detectDevice( null );
     devInfo.textContent = `本机：${ d.kind } · ${ d.cores } 核 · 内存约 ${ d.memoryGB || '?' } GB · WebGPU ${ d.webgpu ? 'API 可用' : 'API 不可用' }`;
   }
   cardConnect.append( devInfo );
@@ -173,14 +184,15 @@ export function renderFedApp ( root: HTMLElement ): void
   const capBox = el( 'div', 'fed-capbox', '正在探测设备能力…' );
   cardConnect.append( capBox );
 
-  // 训练引擎：必须在建房前定，因为它会写进房间清单（所有节点必须一致）
+  // 引擎策略 —— 只有房主有意义。
+  // 刻意**不提供「只用 WebGPU」**：那是唯一的坑 —— 手机走 http 拿不到适配器时
+  // 房主一旦强行指定 GPU，手机会被彻底挡在门外。宁可只留「自动/只用 CPU」。
   const rowEngine = el( 'div', 'fed-row' );
-  rowEngine.append( el( 'label', undefined, '训练引擎' ) );
+  rowEngine.append( el( 'label', undefined, '引擎策略（房主）' ) );
   const inEngine = el( 'select', 'fed-input' ) as HTMLSelectElement;
   for ( const [ value, text ] of [
-    [ 'auto', '自动（WebGPU 可用就用，否则回退 CPU）' ],
-    [ 'gpu', '只用 WebGPU（所有设备都必须支持）' ],
-    [ 'cpu', '只用 CPU（兼容性最好）' ],
+    [ 'auto', '自动 —— 全网都支持 WebGPU 才用 GPU，否则回退 CPU' ],
+    [ 'cpu', '只用 CPU —— 兼容性最好' ],
   ] as Array<[ string, string ]> )
   {
     const opt = el( 'option' ) as HTMLOptionElement;
@@ -191,6 +203,9 @@ export function renderFedApp ( root: HTMLElement ): void
   inEngine.value = 'auto';
   rowEngine.append( inEngine );
   cardConnect.append( rowEngine );
+
+  const engineHint = el( 'p', 'hint' );
+  cardConnect.append( engineHint );
 
   const rowBtns = el( 'div', 'fed-row' );
   const btnHost = el( 'button', 'fed-btn primary', '创建训练房间（主机）' ) as HTMLButtonElement;
@@ -372,6 +387,31 @@ export function renderFedApp ( root: HTMLElement ): void
       ? '本机模式：同一个浏览器再开一个标签页，填同一个房间 ID，两边就能互相训练。全程走 BroadcastChannel，不需要任何服务器。'
       : '跨设备模式：手机与电脑在同一 WiFi 下，手机打开终端里打印的局域网地址，填同一个房间 ID 加入即可。需要信令服务器（npm run demo 会一起起）。';
     renderCapability( cap, null );
+    syncRole();
+  }
+
+  /**
+   * 角色决定权限。
+   * 房主：定义引擎策略与全部训练参数 —— 它们写进清单，由房主下发。
+   * 节点：这些项一律只读。反正改了也不会生效（清单是房主给的），
+   *       明确关掉比让人白改一通、然后纳闷「为什么没生效」好得多。
+   */
+  function syncRole (): void
+  {
+    const isPeer = role === 'peer';
+    const inputs: Array<HTMLInputElement | HTMLSelectElement> = [
+      inRounds[ 1 ], inSteps[ 1 ], inBatch[ 1 ], inLr[ 1 ], inShards[ 1 ], inAgg, inCross, inEngine,
+    ];
+    for ( const i of inputs )
+    {
+      i.disabled = isPeer;
+      i.style.opacity = isPeer ? '0.5' : '1';
+    }
+    engineHint.textContent = role === null
+      ? '引擎由房主在「开始训练」时按全网能力协商：只要有一台设备跑不了 WebGPU，全网就用 CPU。'
+      : isPeer
+        ? '你是参与节点：引擎与全部训练参数由房主下发，本机只上报能力并执行。'
+        : '你是房主：引擎策略与全部参数由你定义；开训时会按全网能力再复核一次引擎，然后下发给各节点。';
   }
 
   /**
@@ -381,7 +421,7 @@ export function renderFedApp ( root: HTMLElement ): void
    */
   function applyEngineDefaults (): void
   {
-    const gpu = inEngine.value === 'gpu' || ( inEngine.value === 'auto' && cap?.adapterOk === true );
+    const gpu = inEngine.value !== 'cpu' && cap?.adapterOk === true;
     const quick = qp( 'quick' ) !== null;
     const set = ( input: HTMLInputElement, name: string, value: string ): void =>
     {
@@ -440,11 +480,15 @@ export function renderFedApp ( root: HTMLElement ): void
     }
     const usable = c.adapterOk;
     const want = inEngine.value;
-    const willUse = want === 'gpu' ? ( usable ? 'gpu-tinygpt' : '（不可用，建房会失败）' )
-      : want === 'cpu' ? 'mlp（CPU）'
-        : usable ? 'gpu-tinygpt（WebGPU）' : 'mlp（CPU 回退）';
+    // 引擎最终由房主决定：节点只上报能力，不自己挑。
+    // 房主会取「能力下限」—— 只要有一台设备跑不了 WebGPU，全网就用 CPU。
+    const willUse = role === 'peer'
+      ? '由房主决定（本机能力已上报，房主按全网能力协商）'
+      : want === 'cpu'
+        ? 'mlp（CPU）—— 房主指定'
+        : usable ? 'gpu-tinygpt（WebGPU）—— 开训时还要按全网能力复核' : 'mlp（CPU 回退）';
     const pick = el( 'div' );
-    pick.append( el( 'b', undefined, '本机将使用的引擎：' ) );
+    pick.append( el( 'b', undefined, role === 'peer' ? '本机使用的引擎：' : '本机倾向使用的引擎：' ) );
     pick.append( document.createTextNode( willUse ) );
     capBox.append( pick );
 
@@ -467,6 +511,7 @@ export function renderFedApp ( root: HTMLElement ): void
     add( '任务', m.taskName );
     add( '清单指纹', m.fingerprint );
     add( '模型', `${ specLabel( m.model ) } · vocab ${ m.model.vocabSize } · seed ${ m.model.seed }` );
+    if ( m.engineReason ) add( '引擎为何这么选', m.engineReason );
     add( '轮次 / 每轮步数', `${ m.rounds } × ${ m.localSteps } 步 × ${ m.batchSize } 序列` );
     add( '学习率', String( m.lr ) );
     add( '聚合', m.aggregate.mode === 'diloco'
@@ -499,7 +544,7 @@ export function renderFedApp ( root: HTMLElement ): void
     const t = el( 'table', 'fed-table' );
     const thead = el( 'thead' );
     const hr = el( 'tr' );
-    for ( const h of [ '名字', '设备', '角色', 'ID', '状态' ] ) hr.append( el( 'th', undefined, h ) );
+    for ( const h of [ '名字', '设备', 'WebGPU', '角色', 'ID', '状态', '就绪' ] ) hr.append( el( 'th', undefined, h ) );
     thead.append( hr );
     t.append( thead );
     const tb = el( 'tbody' );
@@ -509,14 +554,52 @@ export function renderFedApp ( root: HTMLElement ): void
       const tr = el( 'tr' );
       tr.append( el( 'td', undefined, p.name + ( isSelf ? '（我）' : '' ) ) );
       tr.append( el( 'td', undefined, p.device?.kind ?? '?' ) );
+      // 房主协商引擎就看这一列；「API 有但没适配器」是真实存在的情况，要区分开
+      const gpuTd = el( 'td' );
+      if ( isSelf )
+      {
+        gpuTd.append( el( 'span', 'tag', cap?.adapterOk ? '可用' : '不可用' ) );
+      }
+      else if ( p.device?.gpuOk === true )
+      {
+        gpuTd.append( el( 'span', 'tag ok', '可用' ) );
+      }
+      else
+      {
+        gpuTd.append( el( 'span', 'tag warn', p.device?.webgpu ? 'API 有·无适配器' : '无' ) );
+      }
+      tr.append( gpuTd );
       const roleTd = el( 'td' );
-      roleTd.append( el( 'span', `tag ${ p.role === 'host' ? 'host' : '' }`, p.role === 'host' ? '主机/汇聚' : '节点' ) );
+      roleTd.append( el( 'span', `tag ${ p.role === 'host' ? 'host' : '' }`, p.role === 'host' ? '房主/汇聚' : '节点' ) );
       tr.append( roleTd );
       tr.append( el( 'td', undefined, p.peerId.slice( 0, 8 ) ) );
       const stTd = el( 'td' );
       const open = p.peerId === selfId || ( transport?.openPeerIds.includes( p.peerId ) ?? false );
       stTd.append( el( 'span', `tag ${ open ? 'ok' : 'warn' }`, open ? '通道就绪' : '连接中' ) );
       tr.append( stTd );
+
+      // 就绪：只有房主等得到这个信息，所以只在房主侧显示真实值
+      const readyTd = el( 'td' );
+      if ( role !== 'host' || !node )
+      {
+        readyTd.append( el( 'span', 'tag', '—' ) );
+      }
+      else if ( isSelf )
+      {
+        readyTd.append( el( 'span', 'tag host', '房主' ) );
+      }
+      else
+      {
+        const why = node.notReadyReasons.get( p.peerId );
+        const isReady = node.readyIds.includes( p.peerId );
+        const tag = el( 'span', `tag ${ isReady ? 'ok' : why ? 'warn' : '' }`,
+          isReady ? '已就绪' : why ? '未就绪' : '等待' );
+        if ( why ) tag.title = why;
+        // 未就绪的原因写在旁边，别让人去翻日志
+        if ( why ) { readyTd.append( tag, el( 'span', 'hint', ` ${ why }` ) ); }
+        else readyTd.append( tag );
+      }
+      tr.append( readyTd );
       tb.append( tr );
     };
 
@@ -771,11 +854,23 @@ export function renderFedApp ( root: HTMLElement ): void
     setBusy( busy );
   }
 
-  function buildManifest ( corpusRef: Corpus ): RoomManifest
+  /**
+   * 构建房间清单。
+   *
+   * `engineOverride` 由 FedNode 在**开训那一刻**给出 —— 它按全网能力协商出唯一
+   * 可行的引擎。不传时（建房时的预览清单）先按本机能力猜一个，
+   * 点「开始训练」时会被协商结果覆盖。
+   */
+  function buildManifest (
+    corpusRef: Corpus,
+    engineOverride?: 'mlp' | 'gpu-tinygpt',
+    engineReason?: string,
+  ): RoomManifest
   {
-    // 引擎必须在建房时定死：它写进清单，所有节点按同一份规格构造模型，否则权重无法聚合。
-    const want = inEngine.value;
-    const useGpu = want === 'gpu' || ( want === 'auto' && cap?.adapterOk === true );
+    // 引擎必须全网一致：权重形状不同根本没法聚合。
+    const useGpu = engineOverride
+      ? engineOverride === 'gpu-tinygpt'
+      : ( inEngine.value !== 'cpu' && cap?.adapterOk === true );
 
     const model: ModelSpec = useGpu
       ? {
@@ -809,6 +904,10 @@ export function renderFedApp ( root: HTMLElement ): void
       taskName: useGpu ? '字符级语言模型 · WebGPU tiny-GPT' : '字符级语言模型 · 联邦预训练',
       taskBrief: '各节点在自己的语料分片上本地训练，按样本数加权聚合，合出一个全局语言模型。',
       model,
+      engineReason: engineReason
+        ?? ( useGpu
+          ? '建房时按本机能力初选 WebGPU（开训时会按全网能力复核）'
+          : '建房时按本机能力初选 CPU（开训时会按全网能力复核）' ),
       rounds: Math.max( 1, Number( inRounds[ 1 ].value ) || 30 ),
       localSteps: Math.max( 1, Number( inSteps[ 1 ].value ) || 20 ),
       batchSize: Math.max( 1, Number( inBatch[ 1 ].value ) || 32 ),
@@ -842,11 +941,12 @@ export function renderFedApp ( root: HTMLElement ): void
       peerId: randomId(),
       name: inName.value.trim() || '未命名设备',
       role: wantRole,
-      device: detectDevice(),
+      device: detectDevice( cap ),
       joinedAt: Date.now(),
     };
     role = wantRole;
-    addLog( `以 ${ wantRole === 'host' ? '主机' : '节点' } 身份加入房间 ${ roomId }（我的 ID ${ self.peerId.slice( 0, 8 ) }）` );
+    syncRole();
+    addLog( `以 ${ wantRole === 'host' ? '房主' : '参与节点' } 身份加入房间 ${ roomId }（我的 ID ${ self.peerId.slice( 0, 8 ) }）` );
 
     const callbacks = {
       onControl: ( peerId: string, msg: unknown ): void => node?.onControl( peerId, msg as ControlMessage ),
@@ -875,6 +975,8 @@ export function renderFedApp ( root: HTMLElement ): void
       corpus,
       contributionText: inContribution.value,
       manifest: m,
+      // 引擎策略只在房主侧有意义：真正的抉择发生在开训时，按**全网**能力协商
+      enginePolicy: inEngine.value === 'cpu' ? 'cpu' : 'auto',
     } );
 
     addLog( useLocal ? '使用本机总线（BroadcastChannel），无需信令服务器' : `使用 WebRTC，信令 ${ inSignal.value.trim() }` );
@@ -898,7 +1000,7 @@ export function renderFedApp ( root: HTMLElement ): void
     }
     else
     {
-      setStatus( '已加入，等待主机下发任务清单…' );
+      setStatus( '已加入，等待房主下发任务…（房主点「开始训练」后你才会收到清单）' );
     }
     renderRoster( t.peerInfos, self.peerId );
   }
@@ -915,6 +1017,7 @@ export function renderFedApp ( root: HTMLElement ): void
     setBusy( false );
     btnStart.disabled = true;
     btnGen.disabled = true;
+    syncRole();
   }
 
   // ---------- 按钮 ----------
@@ -947,7 +1050,12 @@ export function renderFedApp ( root: HTMLElement ): void
     setBusy( true );
     curveLocal.length = 0;
     curveGlobal.length = 0;
-    void node.startHost().finally( () => setBusy( false ) );
+    // 引擎在**这一刻**才最终确定：房主按房间里所有节点的能力协商（见 FedNode.negotiateEngine），
+    // 只要有一台设备跑不了 WebGPU，全网就回退 CPU。
+    addLog( '开始训练：房主按全网能力协商引擎 → 下发任务 → 等各节点就绪 → 开轮' );
+    void node
+      .startHost( ( engine, reason ) => buildManifest( corpus!, engine, reason ) )
+      .finally( () => setBusy( false ) );
   };
   btnStop.onclick = () => node?.stop();
   btnGen.onclick = () =>

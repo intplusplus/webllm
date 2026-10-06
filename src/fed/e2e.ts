@@ -65,13 +65,14 @@ class TamperingBus extends LocalBus
   }
 }
 
-function makeManifest ( corpus: Corpus, spec: MlpModelSpec ): RoomManifest
+function makeManifest ( corpus: Corpus, spec: MlpModelSpec, engineReason = '测试固定 mlp' ): RoomManifest
 {
   const base = {
     roomId: 'e2e-room',
     taskName: '字符级语言模型 · 联邦预训练',
     taskBrief: '端到端测试',
     model: spec,
+    engineReason,
     rounds: ROUNDS,
     localSteps: LOCAL_STEPS,
     batchSize: BATCH,
@@ -94,6 +95,8 @@ interface NodeBox
   node: FedNode | null;
   roundsSeen: number[];
   done: ModelCard | null;
+  /** 收到的所有状态文案 —— 「开训后拒绝迟到节点」这类断言只能靠它验 */
+  statuses: string[];
 }
 
 function makeBox (
@@ -102,7 +105,7 @@ function makeBox (
   factory: ( opts: ConstructorParameters<typeof LocalBus>[ 0 ] ) => LocalBus,
 ): NodeBox
 {
-  const box: NodeBox = { peer, bus: null as unknown as LocalBus, node: null, roundsSeen: [], done: null };
+  const box: NodeBox = { peer, bus: null as unknown as LocalBus, node: null, roundsSeen: [], done: null, statuses: [] };
   box.bus = factory( {
     roomId,
     self: peer,
@@ -111,7 +114,7 @@ function makeBox (
     onPeerOpen: ( from ) => box.node?.onPeerOpen( from ),
     onPeerClose: ( from ) => box.node?.onPeerClose( from ),
     onRoster: ( peers ) => box.node?.onRoster( peers ),
-    onStatus: () => { /* 断言不依赖状态文案 */ },
+    onStatus: ( s ) => box.statuses.push( s ),
   } );
   return box;
 }
@@ -119,7 +122,7 @@ function makeBox (
 function makeEvents ( box: NodeBox )
 {
   return {
-    onStatus: () => { /* 忽略 */ },
+    onStatus: ( t: string ) => { box.statuses.push( t ); },
     onLog: () => { /* 忽略 */ },
     onRoster: () => { /* 由 FedNode.onRoster 驱动，这里无需额外处理 */ },
     onManifest: () => { /* 断言直接读 node.currentManifest */ },
@@ -167,7 +170,13 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
   try
   {
     await Promise.race( [
-      boxA.node.startHost(),
+      boxA.node.startHost( ( engine, reason ) =>
+      {
+        // 无头 Node 环境必然拿不到 WebGPU 适配器，协商结果应该是 mlp。
+        // 这里显式断言：如果哪天协商逻辑跑偏，要立刻炸出来，而不是默默换引擎。
+        if ( engine !== 'mlp' ) throw new Error( `无头端到端测试预期协商出 mlp，实得 ${ engine }` );
+        return makeManifest( corpus, spec, reason );
+      } ),
       delay( 90000 ).then( () => { throw new Error( '端到端流程超时（90s）' ); } ),
     ] );
     await delay( 120 ); // 等最后一轮的广播与 round/close 送达各节点
@@ -190,6 +199,15 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
     `分片：主机 #${ boxA.node.shard } / B #${ boxB.node.shard } / C #${ boxC.node.shard }` );
   check( '各节点分片互不重叠', new Set( [ boxA.node.shard, boxB.node.shard, boxC.node.shard ] ).size === 3,
     `分片 ${ boxA.node.shard } / ${ boxB.node.shard } / ${ boxC.node.shard }` );
+
+  // --- 房主协调：引擎按全网能力协商 + 开训前就绪握手 ---
+  const sealed = boxA.node.currentManifest;
+  check( '引擎按全网能力下限协商（无头环境 → mlp）',
+    sealed?.model.engine === 'mlp',
+    `协商结果 ${ sealed?.model.engine } —— ${ sealed?.engineReason ?? '（清单里没写原因）' }` );
+  check( '开训前所有节点完成就绪握手',
+    boxA.node.readyIds.length === 2 && boxA.node.notReadyReasons.size === 0,
+    `就绪 ${ boxA.node.readyIds.length } 个，未就绪 ${ boxA.node.notReadyReasons.size } 个` );
 
   // --- 账本完整性 ---
   const roundsRecorded = new Set( ledger.map( ( e ) => e.round ) );
@@ -247,6 +265,26 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
     boxB.done ? `B 的模型卡：${ boxB.done.rounds } 轮，最终 loss ${ boxB.done.finalProbeLoss.toFixed( 3 ) }` : 'B 未收到 onDone' );
   check( '模型卡记录了贡献者与流量', card.contributors.length === 3 && card.transportBytes > 0,
     `贡献者 ${ card.contributors.length } 人，传输 ${ ( card.transportBytes / 1024 ).toFixed( 1 ) } KB，参数量 ${ card.paramCount.toLocaleString() }` );
+
+  // --- 开训后锁房：迟到的节点必须被明确拒绝，而不是静默旁观 ---
+  // 没有这一条，就会出现「房主跑到第 3 轮、手机还停在第 0 轮」这种错位 ——
+  // 用户看到的是「两边不同步」，而且不知道为什么。
+  const peerD: PeerInfo = {
+    peerId: 'dddd0004',
+    name: '迟到节点',
+    role: 'peer',
+    device: { ...device, kind: 'Android 手机' },
+    joinedAt: Date.now(),
+  };
+  const boxD = makeBox( manifest.roomId, peerD, ( o ) => new LocalBus( o ) );
+  boxD.node = new FedNode( { role: 'peer', transport: boxD.bus, events: makeEvents( boxD ), corpus, contributionText: '' } );
+  await boxD.bus.connect();
+  await delay( 250 );
+  check( '开训后加入的节点被明确拒绝，不会默默跟着跑',
+    boxD.statuses.some( ( s ) => s.includes( '房间已锁定' ) ) && boxD.node.currentManifest === null,
+    `节点最后状态「${ boxD.statuses[ boxD.statuses.length - 1 ] ?? '（无）' }」，清单=${ boxD.node.currentManifest ? '有' : '无' }` );
+  boxD.bus.close();
+  await delay( 40 );
 
   boxA.bus.close(); boxB.bus.close(); boxC.bus.close();
   await delay( 40 );

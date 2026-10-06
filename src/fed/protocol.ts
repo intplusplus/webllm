@@ -96,6 +96,12 @@ export interface RoomManifest
   taskName: string;
   taskBrief: string;
   model: ModelSpec;
+  /**
+   * 房主为何选了这个引擎 —— 协商结果，写进清单让所有节点都能看到原因。
+   * 典型内容：「我的手机 没有可用的 WebGPU 适配器」→ 全房间回退 CPU。
+   * 有它才不会出现「用户以为在用 GPU、其实在跑 CPU」这种黑箱。
+   */
+  engineReason?: string;
   /** 总轮次 */
   rounds: number;
   /** 每轮每节点本地步数 */
@@ -141,11 +147,23 @@ export interface WeightMeta
   digest: string;
 }
 
-/** 设备能力快照（只用于展示与调度，不参与正确性）。 */
+/**
+ * 设备能力快照。
+ *
+ * 它**参与调度**：房主正是靠它协商出全网都能跑的引擎。所以关键是 `gpuOk`，
+ * 而不是 `webgpu` —— `navigator.gpu` 存在不代表拿得到适配器（驱动/策略/远程桌面
+ * 都可能让它失败），只有 `gpuOk` 才是「这台机器真能跑 WebGPU 引擎」的充要条件。
+ * 拿不准时一律当作 false：CPU 引擎在任何设备上都能跑，保守回退是安全的。
+ */
 export interface DevCap
 {
   kind: string;
+  /** navigator.gpu 是否存在（注意：存在 ≠ 能用） */
   webgpu: boolean;
+  /** 是否真的拿到了适配器 —— 房主协商引擎只看这个 */
+  gpuOk?: boolean;
+  /** 页面是否处于安全上下文（WebGPU 的另一个门槛） */
+  secureContext?: boolean;
   cores: number;
   memoryGB: number;
   ua: string;
@@ -187,10 +205,22 @@ export interface RoundStats
   entries: LedgerEntry[];
 }
 
-/** 控制帧联合类型。 */
+/**
+ * 控制帧联合类型。
+ *
+ * 房间的权威在房主（host）：
+ *   房主  → assign    下发最终任务（含协商后的引擎与全部参数）
+ *   节点  → ready     确认「模型已建好、随时能训」，或说明为什么不行
+ *   房主  → round/open, [权重], round/close   驱动每一轮
+ *
+ * ready 这一步是关键：没有它，房主只知道「对方连着」，不知道「对方训得动」，
+ * 于是只能靠每轮超时去发现 —— 那正是「两边不同步 + 主机报超时」的来源。
+ */
 export type ControlMessage =
   | { t: 'hello'; peerId: string; name: string; device: DevCap }
   | { t: 'assign'; shardIndex: number; manifest: RoomManifest }
+  | { t: 'ready'; peerId: string; ok: boolean; engine: EngineId; reason?: string }
+  | { t: 'busy'; round: number }
   | { t: 'round/open'; round: number }
   | { t: 'round/close'; stats: RoundStats }
   | { t: 'credit'; peerId: string; chars: number; digest: string }
