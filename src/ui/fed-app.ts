@@ -100,7 +100,20 @@ function qp ( name: string ): string | null
 
 // ------------------------------------------------------------------ 主界面
 
-export function renderFedApp ( root: HTMLElement ): void
+/**
+ * 房间号 = 房间的**密码学身份**：128 位随机数（crypto.getRandomValues），
+ * base32 风格去掉易混字符。同名房间因此必然是不同房间 —— 身份由随机性保证，
+ * 不由名字保证。注意：这是「不可猜」的识别，还不是「需要口令」的鉴权；
+ * 鉴权（加入口令 / 签名）是下一步。
+ */
+function roomCode (): string
+{
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.getRandomValues( new Uint8Array( 10 ) );
+  return [ ...bytes ].map( ( b ) => alphabet[ b % alphabet.length ] ).join( '' );
+}
+
+export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
 {
   // ---------- 状态 ----------
   let corpus: Corpus | null = null;
@@ -119,31 +132,34 @@ export function renderFedApp ( root: HTMLElement ): void
 
   // ---------- 骨架 ----------
   const head = el( 'div', 'fed-head' );
-  head.append( el( 'h1', undefined, '公共训练网络 · 联邦联训 Demo' ) );
-  head.append( el( 'p', undefined,
-    '浏览器开箱参与：各设备在自己的数据上训练，通过 P2P 交换权重做联邦平均，数据不出本地。' ) );
+  head.append( el( 'h1', undefined, view === 'host' ? '房主 · 创建并设计训练房间' : '训练节点 · 加入房间' ) );
+  head.append( el( 'p', undefined, view === 'host'
+    ? '你是房主：任务、模型、参数都由你定义，写进清单下发给所有节点。成员随时可加入退出，不影响训练。'
+    : '加入一个房间参与联邦训练。你的数据不出本地，只交换权重。' ) );
   root.append( head );
 
   // 1 · 连接
   const cardConnect = el( 'section', 'fed-card' );
-  const h1 = el( 'h2' ); h1.append( el( 'span', 'idx', '1' ), el( 'span', undefined, '连接房间' ) );
+  const h1 = el( 'h2' ); h1.append( el( 'span', 'idx', '1' ), el( 'span', undefined, view === 'host' ? '创建房间' : '选择房间' ) );
   cardConnect.append( h1 );
 
+  // 开放房间列表：加入方的第一入口。数据来自信令服务器（只读展示），3 秒自动刷新。
+  const btnRooms = el( 'button', 'fed-btn', '刷新开放房间' ) as HTMLButtonElement;
+  const roomsBox = el( 'div', 'fed-roomlist' );
+  if ( view === 'join' )
+  {
+    cardConnect.append( btnRooms );
+    cardConnect.append( roomsBox );
+  }
+
   const rowRoom = el( 'div', 'fed-row' );
-  rowRoom.append( el( 'label', undefined, '房间号' ) );
+  rowRoom.append( el( 'label', undefined, view === 'host' ? '房间号（自动生成）' : '房间号' ) );
   const inRoom = el( 'input', 'fed-input' ) as HTMLInputElement;
   // 默认给一个随机短号：让每个房主都开**自己的**房间，
   // 别让所有人都挤在同一个写死的默认号里（两台手机抢一个房间的混乱就是这么来的）。
-  inRoom.value = qp( 'room' ) ?? `room-${ randomId().slice( 0, 4 ) }`;
+  inRoom.value = qp( 'room' ) ?? roomCode();
   rowRoom.append( inRoom );
   cardConnect.append( rowRoom );
-
-  // 开放房间列表：加入方直接点一下就进，不用手打、也不用猜房主用了什么号。
-  // 数据来自信令服务器（它本来就认识所有房间，只是把名单读出来给人看）。
-  const btnRooms = el( 'button', 'fed-btn', '刷新开放房间' ) as HTMLButtonElement;
-  const roomsBox = el( 'div', 'fed-roomlist' );
-  cardConnect.append( btnRooms );
-  cardConnect.append( roomsBox );
 
   const rowMode = el( 'div', 'fed-row' );
   rowMode.append( el( 'label', undefined, '联机方式' ) );
@@ -420,11 +436,12 @@ export function renderFedApp ( root: HTMLElement ): void
     modeHint.textContent = local
       ? '本机模式：同一个浏览器再开一个标签页，填同一个房间 ID，两边就能互相训练。全程走 BroadcastChannel，不需要任何服务器。'
       : '跨设备模式：手机与电脑在同一 WiFi 下，手机打开终端里打印的局域网地址，填同一个房间 ID 加入即可。需要信令服务器（npm run demo 会一起起）。';
-    // 本机总线没有服务器，自然也就没有「房间列表」这回事
-    btnRooms.style.display = local ? 'none' : '';
-    roomsBox.style.display = local ? 'none' : '';
-    if ( local ) roomsBox.innerHTML = '';
-    else void refreshRooms();
+    // 本机总线没有服务器，自然没有「房间列表」；房主页也不需要它（房间号是它自己生成的）
+    const showRooms = view === 'join' && inMode.value !== 'local';
+    btnRooms.style.display = showRooms ? '' : 'none';
+    roomsBox.style.display = showRooms ? '' : 'none';
+    if ( showRooms ) void refreshRooms();
+    else roomsBox.innerHTML = '';
     renderCapability( cap, null );
     syncRole();
   }
@@ -1205,6 +1222,40 @@ export function renderFedApp ( root: HTMLElement ): void
   };
 
   // ---------- 启动 ----------
+
+  // 按视图裁剪：房主页和节点页的职责本来就不同，混在一页里只会让人不知道该点哪个。
+  if ( view === 'join' )
+  {
+    // 加入方不需要「房间设计」（那是房主的事），也不该看到开始/停止
+    cardTrain.remove();
+    btnHost.style.display = 'none';
+    btnStart.style.display = 'none';
+    btnStop.style.display = 'none';
+  }
+  else
+  {
+    // 房主不需要「挑房间」—— 房间号是它自己生成的
+    btnRooms.style.display = 'none';
+    roomsBox.style.display = 'none';
+    btnJoin.style.display = 'none';
+  }
+  // 两页互通：谁都能当房主，也能随时换角色
+  {
+    const switchBar = el( 'p', 'hint' );
+    const a = document.createElement( 'a' );
+    a.href = view === 'host' ? '/join.html' : '/host.html';
+    a.textContent = view === 'host' ? '→ 切换到加入页（浏览开放房间）' : '→ 切换到房主页（创建并设计房间）';
+    switchBar.append( a );
+    head.append( switchBar );
+  }
+  // 开放房间列表 3 秒自动刷新 —— 不然房主建好房了，加入方看到的还是旧的空列表。
+  // 这正是「根本不知道加入哪个房间」的成因：列表只拉了一次。
+  const roomPoll = window.setInterval( () =>
+  {
+    if ( role !== null || view !== 'join' || inMode.value === 'local' ) return;
+    void refreshRooms();
+  }, 3000 );
+  window.addEventListener( 'beforeunload', () => window.clearInterval( roomPoll ) );
 
   drawChart();
   setBusy( false );

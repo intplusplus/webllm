@@ -42,7 +42,9 @@ const check = ( name, pass, detail ) => results.push( { name, pass, detail } );
 
 async function runScenario ( { name, query, base, cdpPort, shotPrefix } )
 {
-  const url = `${ base }/fed.html?${ query }`;
+  // 房主与节点是**两个页面**（host.html / join.html），职责不同，URL 也不同。
+  const hostUrl = `${ base }/host.html?${ query }`;
+  const peerUrl = `${ base }/join.html?${ query }`;
   const host = await newPage( cdpPort );
   const peer = await newPage( cdpPort );
   const dump = async ( tag, cdp ) =>
@@ -57,8 +59,8 @@ async function runScenario ( { name, query, base, cdpPort, shotPrefix } )
 
   try
   {
-    await host.send( 'Page.navigate', { url } );
-    await peer.send( 'Page.navigate', { url } );
+    await host.send( 'Page.navigate', { url: hostUrl } );
+    await peer.send( 'Page.navigate', { url: peerUrl } );
 
     await waitFor( host, 'document.readyState === "complete"', 20000, `${ name } 主机页面加载` );
     await waitFor( peer, 'document.readyState === "complete"', 20000, `${ name } 节点页面加载` );
@@ -100,8 +102,8 @@ async function runScenario ( { name, query, base, cdpPort, shotPrefix } )
     const peerStatus = String( await evaluate( peer, `(document.querySelector( '.fed-status' ) || {}).textContent || ''` ) );
 
     // --- 断言 ---
-    check( `[${ name }] 两个标签页都加载出界面`, hostText.includes( '连接房间' ) && peerText.includes( '连接房间' ),
-      `主机文本 ${ hostText.length } 字符，节点 ${ peerText.length } 字符` );
+    check( `[${ name }] 两个标签页都加载出各自的角色页`, hostText.includes( '创建房间' ) && peerText.includes( '选择房间' ),
+      `主机含「创建房间」=${ hostText.includes( '创建房间' ) }，节点含「选择房间」=${ peerText.includes( '选择房间' ) }` );
 
     check( `[${ name }] 能力面板渲染出来`, hostText.includes( '安全上下文' ) && hostText.includes( '适配器' ),
       `含「安全上下文」=${ hostText.includes( '安全上下文' ) }，含「适配器」=${ hostText.includes( '适配器' ) }` );

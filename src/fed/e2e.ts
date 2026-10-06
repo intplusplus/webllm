@@ -281,9 +281,12 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
   await boxD.bus.connect();
   await delay( 400 );
 
-  const dSaw = boxD.statuses.filter( ( s ) => s.includes( '参与' ) ).slice( -1 )[ 0 ];
-  check( '训练开始后加入的节点被接受并下发任务（不再是「被拒绝」）',
-    boxD.node.currentManifest !== null && boxD.statuses.some( ( s ) => s.includes( '从下一轮开始参与' ) ),
+  const dSaw = boxD.statuses.filter( ( s ) => s.includes( '参与' ) || s.includes( '已结束' ) ).slice( -1 )[ 0 ];
+  // 训练已收尾才加入 → 应明确告知「训练已结束」；训练中才加入 → 应告知「从下一轮参与」。
+  // 两种都必须有明确提示，绝不能让加入方干等一个永远不会来的下一轮。
+  check( '训练开始后加入的节点被接受、下发任务，并拿到明确的房间状态',
+    boxD.node.currentManifest !== null
+    && boxD.statuses.some( ( s ) => s.includes( '从下一轮开始参与' ) || s.includes( '训练已结束' ) ),
     `状态「${ dSaw ?? '（无）' }」，清单=${ boxD.node.currentManifest ? '有' : '无' }` );
 
   const digD = weightsDigest( await boxD.node.engineRef.getWeights() );

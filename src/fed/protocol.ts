@@ -254,7 +254,7 @@ export type ControlMessage =
   | { t: 'hello'; peerId: string; name: string; device: DevCap }
   | { t: 'assign'; shardIndex: number; manifest: RoomManifest }
   | { t: 'ready'; peerId: string; ok: boolean; engine: EngineId; reason?: string }
-  | { t: 'sync'; round: number }
+  | { t: 'sync'; round: number; finished?: boolean }
   | { t: 'round/open'; round: number }
   | { t: 'round/close'; stats: RoundStats }
   | { t: 'credit'; peerId: string; chars: number; digest: string }

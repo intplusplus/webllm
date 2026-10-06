@@ -286,8 +286,16 @@ export class FedNode
           break;
         case 'sync':
           // 房主把「当前全局权重」推给中途加入的本机（紧随其后就是一帧二进制权重）
-          this.o.events.onLog( `房主正在同步第 ${ msg.round } 轮的全局权重，本机从下一轮开始参与` );
-          this.o.events.onStatus( `已对齐到第 ${ msg.round } 轮 · 从下一轮开始参与训练` );
+          if ( msg.finished )
+          {
+            this.o.events.onStatus( `训练已结束（共 ${ msg.round } 轮）· 你加入晚了，这一轮没赶上` );
+            this.o.events.onLog( '房主已把最终全局权重同步给本机。训练已经收尾，等房主重新开始就能参与。' );
+          }
+          else
+          {
+            this.o.events.onStatus( `已对齐到第 ${ msg.round } 轮 · 从下一轮开始参与训练` );
+            this.o.events.onLog( `房主正在同步第 ${ msg.round } 轮的全局权重，本机从下一轮开始参与` );
+          }
           break;
         case 'round/open':
           // 还没有清单 = 本机还没被房主纳入，别跟着跑（等 assign 来了再说）
@@ -456,11 +464,19 @@ export class FedNode
   private pushCurrentGlobal ( peerId: string ): void
   {
     if ( this.currentRound === 0 || !this.currentGlobal ) return;
-    this.o.transport.sendControl( peerId, { t: 'sync', round: this.currentRound } satisfies ControlMessage );
+    // 训练已经收尾才加入的节点，必须明确告诉它「你来晚了」，不能让它干等永远不会来的下一轮
+    const finished = !this.running;
+    this.o.transport.sendControl( peerId, {
+      t: 'sync', round: this.currentRound, ...( finished ? { finished: true } : {} ),
+    } satisfies ControlMessage );
     const buf = encodeWeights( this.currentGlobal );
     this.transportBytes += buf.byteLength;
     this.o.transport.send( peerId, buf );
-    this.o.events.onLog( `已把第 ${ this.currentRound } 轮的全局权重同步给 ${ this.nameOf( peerId ) }` );
+    this.o.events.onLog(
+      finished
+        ? `${ this.nameOf( peerId ) } 是训练结束后才加入的，已把最终全局权重给它（并告知已结束）`
+        : `已把第 ${ this.currentRound } 轮的全局权重同步给 ${ this.nameOf( peerId ) }`,
+    );
   }
 
   /**

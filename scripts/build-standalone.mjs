@@ -73,6 +73,7 @@ ${css}
       <span style="color:#8b98a9">单文件版 · 零服务器 · 离线可用</span>
     </nav>
     <div id="app"></div>
+    <script>window.__WEBLLM_FED_VIEW__ = 'host';</script>
     <script>window.__WEBLLM_INLINE_CORPUS__ = ${corpusLiteral};</script>
     <script>
 ${js}

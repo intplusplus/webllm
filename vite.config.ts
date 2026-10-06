@@ -8,12 +8,14 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
-    // 多页入口：index.html 是单机训练台，fed.html 是联邦联训 Demo。
+    // 多页入口：index 单机训练台；fed 着陆页；host 房主页；join 节点页。
     // 用相对路径（相对 vite root，默认即项目根目录），避免在 ESM 配置里引入 node 类型。
     rollupOptions: {
       input: {
         index: 'index.html',
         fed: 'fed.html',
+        host: 'host.html',
+        join: 'join.html',
       },
     },
   },
