@@ -10,8 +10,8 @@
  *   - 同一 seed 的模型是否逐位一致（联邦的前提）
  *   - 真实的联邦训练，是否真的比「单节点独训」在共同探针上更好
  */
-import { buildStoi, corpusDigest, encodeTo, pickProbe, shardText, vocabOf } from './corpus';
-import { TinyMlpEngine } from './engine';
+import { buildStoi, corpusDigest, encodeTo, pickProbe, shardText, vocabOf } from '../../fed/corpus';
+import { TinyMlpEngine } from '../../fed/engine';
 import {
   aggregateGlobal,
   decodeWeights,
@@ -23,7 +23,7 @@ import {
   type AggregateState,
   type MlpModelSpec,
   type NamedWeights,
-} from './protocol';
+} from '../../fed/protocol';
 
 export interface CheckResult
 {

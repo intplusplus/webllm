@@ -15,15 +15,15 @@ import { createComputePipeline, dispatch } from '../gpu/pipeline';
 import { headDim, type GPTConfig } from './config';
 import type { GPTWeights, LinearWeights } from './init';
 
-import embeddingWgsl from '../gpu/kernels/embedding.wgsl?raw';
-import vecAddWgsl from '../gpu/kernels/vec_add.wgsl?raw';
-import layernormWgsl from '../gpu/kernels/layernorm.wgsl?raw';
-import addLayernormWgsl from '../gpu/kernels/add_layernorm.wgsl?raw';
-import gemmNtWgsl from '../gpu/kernels/gemm_nt.wgsl?raw';
-import gemmNtF16FromF32Wgsl from '../gpu/kernels/gemm_nt_f16_from_f32.wgsl?raw';
-import ropeWgsl from '../gpu/kernels/rope.wgsl?raw';
-import attentionWgsl from '../gpu/kernels/attention.wgsl?raw';
-import geluWgsl from '../gpu/kernels/gelu.wgsl?raw';
+import embeddingWgsl from '../gpu/kernels/embedding/embedding.wgsl?raw';
+import vecAddWgsl from '../gpu/kernels/misc/vec_add.wgsl?raw';
+import layernormWgsl from '../gpu/kernels/norm/layernorm.wgsl?raw';
+import addLayernormWgsl from '../gpu/kernels/norm/add_layernorm.wgsl?raw';
+import gemmNtWgsl from '../gpu/kernels/gemm/gemm_nt.wgsl?raw';
+import gemmNtF16FromF32Wgsl from '../gpu/kernels/gemm/gemm_nt_f16_from_f32.wgsl?raw';
+import ropeWgsl from '../gpu/kernels/rope/rope.wgsl?raw';
+import attentionWgsl from '../gpu/kernels/attention/attention.wgsl?raw';
+import geluWgsl from '../gpu/kernels/activation/gelu.wgsl?raw';
 
 const EPS = 1e-5;
 const ROPE_BASE = 10000;

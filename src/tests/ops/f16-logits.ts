@@ -1,8 +1,8 @@
-import type { GpuContext } from '../gpu/device';
-import { checkTolerance, makeRng } from '../reference/cpu-ref';
-import { DEFAULT_CONFIG } from '../model/config';
-import { initWeights } from '../model/init';
-import { TinyGpt } from '../model/tiny-gpt';
+import type { GpuContext } from '../../gpu/device';
+import { checkTolerance, makeRng } from '../../reference/cpu-ref';
+import { DEFAULT_CONFIG } from '../../model/config';
+import { initWeights } from '../../model/init';
+import { TinyGpt } from '../../model/tiny-gpt';
 
 /**
  * M3：同一份权重下，f16 GEMM 推理 logits 与 fp32 推理 logits 回归。

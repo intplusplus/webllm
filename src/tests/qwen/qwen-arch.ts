@@ -1,8 +1,8 @@
-import type { GpuContext } from '../gpu/device';
-import { checkTolerance, makeRng } from '../reference/cpu-ref';
-import { qwenForwardRef } from '../reference/qwen-ref';
-import type { QwenConfig } from '../model/qwen-config';
-import { QwenGpt, type QwenLayerWeights, type QwenWeights } from '../model/qwen';
+import type { GpuContext } from '../../gpu/device';
+import { checkTolerance, makeRng } from '../../reference/cpu-ref';
+import { qwenForwardRef } from '../../reference/qwen-ref';
+import type { QwenConfig } from '../../model/qwen-config';
+import { QwenGpt, type QwenLayerWeights, type QwenWeights } from '../../model/qwen';
 
 /** 与真实 Qwen2.5 同构但极小：保留 GQA(4→2)、奇数 intermediate、24 万级词表外的长 dim。 */
 const TEST_CONFIG: QwenConfig = {

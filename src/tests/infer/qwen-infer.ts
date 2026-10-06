@@ -1,15 +1,15 @@
-import type { GpuContext } from '../gpu/device';
-import { f16BitsToF32 } from '../weights/safetensors';
-import { loadQwenWeights, QWEN_LOCAL_DIR } from '../weights/qwen-loader';
-import { QwenGpt } from '../model/qwen';
-import { QWEN25_05B } from '../model/qwen-config';
-import { BpeTokenizer } from '../tokenizer/bpe';
+import type { GpuContext } from '../../gpu/device';
+import { f16BitsToF32 } from '../../weights/safetensors';
+import { loadQwenWeights, QWEN_LOCAL_DIR } from '../../weights/qwen-loader';
+import { QwenGpt } from '../../model/qwen';
+import { QWEN25_05B } from '../../model/qwen-config';
+import { BpeTokenizer } from '../../tokenizer/bpe';
 import {
     buildQwenChatText,
     generateQwen,
     QWEN_ENDOFTEXT,
     QWEN_IM_END,
-} from '../infer/qwen-generate';
+} from '../../infer/qwen-generate';
 
 /** f32 → 最近偶数 f16 → f32，与 buffer.ts 的 writeF16 舍入方式一致。 */
 function roundF16(x: number): number {

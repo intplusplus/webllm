@@ -1,5 +1,5 @@
-import type { GpuContext } from './gpu/device';
-import { allTests, type TestResult } from './tests';
+import type { GpuContext } from '../gpu/device';
+import { allTests, type TestResult } from '../tests';
 
 export type { TestResult };
 

@@ -1,6 +1,6 @@
-import type { GpuContext } from '../gpu/device';
-import { initWeights } from '../model/init';
-import { TinyGpt } from '../model/tiny-gpt';
+import type { GpuContext } from '../../gpu/device';
+import { initWeights } from '../../model/init';
+import { TinyGpt } from '../../model/tiny-gpt';
 
 /** M3 性能报告：fp32 / f16 GEMM 两条推理路径的前向 tokens/s 与 steps/s。 */
 export async function testPerformanceBench(gpu: GpuContext): Promise<string> {

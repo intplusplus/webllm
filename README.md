@@ -44,7 +44,9 @@ WebGPU 支持的浏览器（Chrome / Edge 113+）。开发环境实测基线见 
 
 ```
 src/
-├── gpu/          # device / arena / buffer / pipeline + kernels/*.wgsl（35 个自研算子）
+├── app/          # 页面入口：main(单机训练台) / fed-main(联邦三页) / selftest(自检运行器)
+├── gpu/          # WebGPU 计算引擎：device/arena/buffer/pipeline + kernels/*.wgsl（35 个自研算子）
+│   └── kernels/  #   按算子类型分 7 组：gemm/ norm/ attention/ rope/ activation/ embedding/ misc/
 ├── model/        # tiny-gpt 前反向图、权重初始化、Qwen 架构
 ├── train/        # 训练循环、AdamW、语料 batch、SFT/DPO 指令数据
 ├── infer/        # 生成循环 + KV cache、temperature/top-k/top-p采样
@@ -52,8 +54,10 @@ src/
 ├── weights/      # safetensors 解析、GPTQ int4 反量化、权重上传
 ├── store/        # IndexedDB checkpoint（权重 + AdamW 状态）
 ├── reference/    # CPU 参考实现（GPU 对拍基准）
-├── fed/          # 公共训练网络：协议 / 引擎抽象 / P2P 传输 / 联邦训练节点 / 自检
-└── tests/        # 算子对拍、梯度检验、SFT/DPO/checkpoint、推理对拍
+├── fed/          # 公共训练网络：协议/引擎抽象/编排/传输（详见文件内注释与规划文档）
+└── tests/        # 自检注册表（kernels+model 两组，页面内 44 项）
+    ├── ops/ train/ infer/ qwen/ perf/    # 独立测试按域分组（被 model.ts 注册）
+    └── fed/                              # 联邦无头自检（selfcheck）与端到端（e2e），由 scripts/verify-*.mjs 驱动
 ```
 
 关键约束（详细推导见实施计划）：
@@ -156,6 +160,9 @@ DPO margin 0→5.1。解码吞吐从 1.2 → 10+ tokens/s，实测数据见
 [docs/性能实测记录.md](docs/性能实测记录.md)，bug 档案见
 [docs/bug记录.md](docs/bug记录.md)，各阶段验证方式见
 [docs/实施计划.md](docs/实施计划.md)。
+
+> 想快速建立全局理解？先读 [docs/架构总览.md](docs/架构总览.md)
+> （分层 / 调用链 / 不变量 / 测试体系 / 债务清单）。
 
 ### 公共训练网络路线
 

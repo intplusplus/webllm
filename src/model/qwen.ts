@@ -15,18 +15,18 @@ import {
 import { CommandBatch, createBatchProfile, createComputePipeline, dispatch, type BatchProfile } from '../gpu/pipeline';
 import { qwenHeadDim, qwenKvDim, type QwenConfig } from './qwen-config';
 
-import embeddingF16Wgsl from '../gpu/kernels/embedding_f16.wgsl?raw';
-import vecAddWgsl from '../gpu/kernels/vec_add.wgsl?raw';
-import rmsnormWgsl from '../gpu/kernels/rmsnorm.wgsl?raw';
-import gemmNtF16FromF32Wgsl from '../gpu/kernels/gemm_nt_f16_from_f32.wgsl?raw';
-import gemmGemvF16Wgsl from '../gpu/kernels/gemm_gemv_f16.wgsl?raw';
-import gemmGemvSplitF16Wgsl from '../gpu/kernels/gemm_gemv_split_f16.wgsl?raw';
-import gemmGemvSplitReduceWgsl from '../gpu/kernels/gemm_gemv_split_reduce.wgsl?raw';
-import ropeHalfWgsl from '../gpu/kernels/rope_half.wgsl?raw';
-import attentionGqaWgsl from '../gpu/kernels/attention_gqa.wgsl?raw';
-import attentionGqaCacheWgsl from '../gpu/kernels/attention_gqa_cache.wgsl?raw';
-import kvStoreWgsl from '../gpu/kernels/kv_store.wgsl?raw';
-import siluMulWgsl from '../gpu/kernels/silu_mul.wgsl?raw';
+import embeddingF16Wgsl from '../gpu/kernels/embedding/embedding_f16.wgsl?raw';
+import vecAddWgsl from '../gpu/kernels/misc/vec_add.wgsl?raw';
+import rmsnormWgsl from '../gpu/kernels/norm/rmsnorm.wgsl?raw';
+import gemmNtF16FromF32Wgsl from '../gpu/kernels/gemm/gemm_nt_f16_from_f32.wgsl?raw';
+import gemmGemvF16Wgsl from '../gpu/kernels/gemm/gemm_gemv_f16.wgsl?raw';
+import gemmGemvSplitF16Wgsl from '../gpu/kernels/gemm/gemm_gemv_split_f16.wgsl?raw';
+import gemmGemvSplitReduceWgsl from '../gpu/kernels/gemm/gemm_gemv_split_reduce.wgsl?raw';
+import ropeHalfWgsl from '../gpu/kernels/rope/rope_half.wgsl?raw';
+import attentionGqaWgsl from '../gpu/kernels/attention/attention_gqa.wgsl?raw';
+import attentionGqaCacheWgsl from '../gpu/kernels/attention/attention_gqa_cache.wgsl?raw';
+import kvStoreWgsl from '../gpu/kernels/misc/kv_store.wgsl?raw';
+import siluMulWgsl from '../gpu/kernels/activation/silu_mul.wgsl?raw';
 
 /** 必须与 attention_gqa.wgsl 中的 MAX_T 一致。 */
 const MAX_T = 512;

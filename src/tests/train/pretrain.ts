@@ -1,9 +1,9 @@
-import type { GpuContext } from '../gpu/device';
-import { makeRng } from '../reference/cpu-ref';
-import { initWeights } from '../model/init';
-import { Trainer } from '../train/trainer';
-import { loadTinyShakespeare } from '../train/data';
-import { generateTokens } from '../infer/generate';
+import type { GpuContext } from '../../gpu/device';
+import { makeRng } from '../../reference/cpu-ref';
+import { initWeights } from '../../model/init';
+import { Trainer } from '../../train/trainer';
+import { loadTinyShakespeare } from '../../train/data';
+import { generateTokens } from '../../infer/generate';
 
 interface Metric {
   step: number;

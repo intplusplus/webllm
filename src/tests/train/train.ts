@@ -1,6 +1,6 @@
-import type { GpuContext } from '../gpu/device';
-import { initWeights } from '../model/init';
-import { Trainer } from '../train/trainer';
+import type { GpuContext } from '../../gpu/device';
+import { initWeights } from '../../model/init';
+import { Trainer } from '../../train/trainer';
 
 /**
  * 训练闭环验证：固定小语料 + AdamW，loss 应显著下降并趋近 0（过拟合）。

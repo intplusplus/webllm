@@ -5,18 +5,18 @@ import { DEFAULT_CONFIG } from '../model/config';
 import { initWeights } from '../model/init';
 import { TinyGpt } from '../model/tiny-gpt';
 import type { SelfTest } from './kernels';
-import { testGradientCheck } from './gradcheck';
-import { testTraining } from './train';
-import { testPretrain } from './pretrain';
-import { testGenerate } from './generate';
-import { testGptForwardF16 } from './f16-logits';
-import { testPerformanceBench } from './bench';
-import { testWeightsFormat } from './weights';
-import { testQwenWeightFormat } from './qwen-format';
-import { testTokenizer } from './tokenizer';
-import { testQwenArch, testQwenKvCache } from './qwen-arch';
-import { testQwenInfer } from './qwen-infer';
-import { testSft, testCheckpoint, testDpo } from './posttrain';
+import { testGradientCheck } from './ops/gradcheck';
+import { testTraining } from './train/train';
+import { testPretrain } from './train/pretrain';
+import { testGenerate } from './infer/generate';
+import { testGptForwardF16 } from './ops/f16-logits';
+import { testPerformanceBench } from './perf/bench';
+import { testWeightsFormat } from './qwen/weights';
+import { testQwenWeightFormat } from './qwen/qwen-format';
+import { testTokenizer } from './qwen/tokenizer';
+import { testQwenArch, testQwenKvCache } from './qwen/qwen-arch';
+import { testQwenInfer } from './infer/qwen-infer';
+import { testSft, testCheckpoint, testDpo } from './train/posttrain';
 
 /**
  * M1 关键验证：完整 GPT 前向的 GPU logits 与独立 CPU 参考实现逐元素对拍。

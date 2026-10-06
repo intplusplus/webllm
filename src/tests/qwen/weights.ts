@@ -1,7 +1,7 @@
-import type { GpuContext } from '../gpu/device';
-import { checkTolerance } from '../reference/cpu-ref';
-import { expectTensor, parseSafetensors, readTensorF32 } from '../weights/safetensors';
-import { dequantizeGptqInt4 } from '../weights/quant';
+import type { GpuContext } from '../../gpu/device';
+import { checkTolerance } from '../../reference/cpu-ref';
+import { expectTensor, parseSafetensors, readTensorF32 } from '../../weights/safetensors';
+import { dequantizeGptqInt4 } from '../../weights/quant';
 
 /** 测试本地构造一个最小 safetensors 文件。 */
 function buildSafetensors (): ArrayBuffer

@@ -1,11 +1,11 @@
-﻿import type { GpuContext } from '../gpu/device';
-import { initWeights } from '../model/init';
-import { TinyGpt } from '../model/tiny-gpt';
-import type { GPTConfig } from '../model/config';
-import { Trainer } from '../train/trainer';
-import { makeSftSamples, makeDpoPairs, SFT_VOCAB, type SftSample } from '../train/sft-data';
-import { buildBatch, greedyCompletion } from '../train/sft';
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from '../store/checkpoint';
+﻿import type { GpuContext } from '../../gpu/device';
+import { initWeights } from '../../model/init';
+import { TinyGpt } from '../../model/tiny-gpt';
+import type { GPTConfig } from '../../model/config';
+import { Trainer } from '../../train/trainer';
+import { makeSftSamples, makeDpoPairs, SFT_VOCAB, type SftSample } from '../../train/sft-data';
+import { buildBatch, greedyCompletion } from '../../train/sft';
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from '../../store/checkpoint';
 
 /**
  * 后训练管线（M6）：SFT → checkpoint → DPO，全部浏览器端。

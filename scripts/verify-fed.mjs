@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 联邦训练核心的自检运行器。
  * 用法： npm run verify:fed
  */
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { bundleAndImport } from './lib/bundle.mjs';
 
 const root = path.resolve( path.dirname( fileURLToPath( import.meta.url ) ), '..' );
-const { runFedSelfCheck } = await bundleAndImport( root, 'src/fed/selfcheck.ts', 'selfcheck' );
+const { runFedSelfCheck } = await bundleAndImport( root, 'src/tests/fed/selfcheck.ts', 'selfcheck' );
 
 const text = fs.readFileSync( path.join( root, 'public', 'data', 'tinyshakespeare.txt' ), 'utf8' );
 

@@ -1,6 +1,6 @@
-import type { GpuContext } from '../gpu/device';
-import { f16BitsToF32, parseSafetensorsHeader, type SafetensorEntry } from '../weights/safetensors';
-import { dequantizeGptqInt4 } from '../weights/quant';
+import type { GpuContext } from '../../gpu/device';
+import { f16BitsToF32, parseSafetensorsHeader, type SafetensorEntry } from '../../weights/safetensors';
+import { dequantizeGptqInt4 } from '../../weights/quant';
 
 /** 权重已下载到本地 public/models 下，由 Vite 静态服务提供（支持 Range）。 */
 const LOCAL_DIR = '/models/qwen2.5-0.5b-int4/';

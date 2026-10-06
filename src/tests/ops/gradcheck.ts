@@ -1,7 +1,7 @@
-import type { GpuContext } from '../gpu/device';
-import { makeRng } from '../reference/cpu-ref';
-import { initWeights } from '../model/init';
-import { Trainer } from '../train/trainer';
+import type { GpuContext } from '../../gpu/device';
+import { makeRng } from '../../reference/cpu-ref';
+import { initWeights } from '../../model/init';
+import { Trainer } from '../../train/trainer';
 
 /**
  * 梯度检验：中心差分数值梯度 vs 反向传播解析梯度。

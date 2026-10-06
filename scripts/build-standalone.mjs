@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 打包「自包含单文件 demo」： demo/fed-standalone.html
  *
  * 目标是把整个联邦联训 demo 压成一个 HTML 文件：双击即可打开，不需要 Vite、
@@ -25,7 +25,7 @@ fs.rmSync( tmp, { recursive: true, force: true } );
 fs.mkdirSync( tmp, { recursive: true } );
 
 await esbuild.build( {
-  entryPoints: [ path.join( root, 'src', 'fed-main.ts' ) ],
+  entryPoints: [ path.join( root, 'src', 'app', 'fed-main.ts' ) ],
   bundle: true,
   format: 'iife',
   platform: 'browser',

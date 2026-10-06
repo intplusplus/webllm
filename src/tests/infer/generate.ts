@@ -1,7 +1,7 @@
-import type { GpuContext } from '../gpu/device';
-import { makeRng } from '../reference/cpu-ref';
-import { initWeights } from '../model/init';
-import { generateTokens } from '../infer/generate';
+import type { GpuContext } from '../../gpu/device';
+import { makeRng } from '../../reference/cpu-ref';
+import { initWeights } from '../../model/init';
+import { generateTokens } from '../../infer/generate';
 
 /** 生成器冒烟测试：验证自回归循环、logits 读取、sampler 和输出 id 合法性。 */
 export async function testGenerate(gpu: GpuContext): Promise<string> {

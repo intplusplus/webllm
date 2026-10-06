@@ -523,10 +523,10 @@ P4  信任层与激励（M-N3/M-N7）—— 仅在将来对外开放时才需要
 | `src/fed/transport.ts` | `Transport` 接口 + WebRTC 网状连接 + 信令客户端 |
 | `src/fed/bus.ts` | `LocalBus`：BroadcastChannel 本机多标签页通道，**零服务器** |
 | `src/fed/node.ts` | 联邦训练编排：开轮 / 校验 / 聚合 / 账本 / 模型卡 |
-| `src/fed/selfcheck.ts` | 核心逻辑的无头自检（16 项） |
-| `src/fed/e2e.ts` | 三节点端到端测试，含一个故意作弊的节点（16 项） |
+| `src/tests/fed/selfcheck.ts` | 核心逻辑的无头自检（19 项） |
+| `src/tests/fed/e2e.ts` | 三节点端到端测试，含一个故意作弊的节点（20 项） |
 | `src/ui/fed-app.ts` + `src/ui/fed.css` | Demo 界面 |
-| `fed.html` + `src/fed-main.ts` | Demo 入口 |
+| `src/app/fed-main.ts` | Demo 入口（fed/host/join 三页共用） |
 | `scripts/signal-server.mjs` | 零依赖信令服务器 |
 | `scripts/start-demo.mjs` | 一键启动（信令 + dev server + 打印局域网地址与防火墙提示）；`--https` 用自签证书起 HTTPS（WebGPU 需要安全上下文） |
 | `scripts/lib/cert.mjs` | 用 Git 自带 openssl 生成本地 CA + 叶证书（含局域网 IP 的 SAN） |

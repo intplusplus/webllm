@@ -1,7 +1,7 @@
-import type { GpuContext } from './gpu/device';
+import type { GpuContext } from '../gpu/device';
 import { runSelfTest } from './selftest';
-import { renderTrainApp } from './ui/app';
-import './ui/styles.css';
+import { renderTrainApp } from '../ui/app';
+import '../ui/styles.css';
 
 function requireElement<T extends Element>(selector: string): T {
   const node = document.querySelector<T>(selector);
@@ -78,7 +78,7 @@ async function boot(): Promise<void>
   let gpu: GpuContext;
   try
   {
-    gpu = await ( await import( './gpu/device' ) ).initGpu();
+    gpu = await ( await import( '../gpu/device' ) ).initGpu();
   }
   catch ( err )
   {

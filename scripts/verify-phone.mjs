@@ -97,36 +97,52 @@ function phoneSerial ()
 /** 确保 CDP 转发与 localhost 反向隧道都在（无线调试重连后 forward/reverse 规则会丢）。 */
 function ensureTunnels ()
 {
-    const serial = phoneSerial();
-    SERIAL = serial;
-    const adb = ( ...args ) => execFileSync( 'adb', [ '-s', serial, ...args ], { encoding: 'utf8', timeout: 15000 } );
-    const fwd = adb( 'forward', '--list' );
-    if ( !/tcp:9222/.test( fwd ) ) adb( 'forward', 'tcp:9222', 'localabstract:chrome_devtools_remote' );
-    const rev = adb( 'reverse', '--list' );
-    if ( !/tcp:5173/.test( rev ) ) adb( 'reverse', 'tcp:5173', 'tcp:5173' );
-    if ( !/tcp:5180/.test( rev ) ) adb( 'reverse', 'tcp:5180', 'tcp:5180' );
+  const serial = phoneSerial();
+  SERIAL = serial;
+  const adb = ( ...args ) => execFileSync( 'adb', [ '-s', serial, ...args ], { encoding: 'utf8', timeout: 15000 } );
+  const fwd = adb( 'forward', '--list' );
+  if ( !/tcp:9222/.test( fwd ) ) adb( 'forward', 'tcp:9222', 'localabstract:chrome_devtools_remote' );
+  const rev = adb( 'reverse', '--list' );
+  if ( !/tcp:5173/.test( rev ) ) adb( 'reverse', 'tcp:5173', 'tcp:5173' );
+  if ( !/tcp:5180/.test( rev ) ) adb( 'reverse', 'tcp:5180', 'tcp:5180' );
+}
+
+/** 转发规则在但 socket 可能已僵死（实测遇到过一次）：fetch 失败就 remove 再 add 自愈一次。 */
+async function ensureCdpReachable ()
+{
+  const probe = async () =>
+  {
+    try { await fetch( 'http://localhost:9222/json/version', { signal: AbortSignal.timeout( 4000 ) } ); return true; }
+    catch { return false; }
+  };
+  if ( await probe() ) return;
+  try
+  {
+    execFileSync( 'adb', [ '-s', SERIAL, 'forward', '--remove', 'tcp:9222' ], { timeout: 10000 } );
+    execFileSync( 'adb', [ '-s', SERIAL, 'forward', 'tcp:9222', 'localabstract:chrome_devtools_remote' ], { timeout: 10000 } );
+  }
+  catch { /* 忽略，下面再探 */ }
+  await delay( 1500 );
+  if ( !( await probe() ) ) throw new Error( '手机 CDP 转发不可达（9222）。检查无线调试是否被系统关掉' );
 }
 
 /** 确保手机上有浏览器在跑。这台机器的浏览器是 **Edge**（UA: EdgA，包名 com.microsoft.emmx）；
- *  被系统杀掉后 9222 没有 page target，用 adb 把它拉起来（顺手开个 join 页恢复现场）。 */
+ *  被系统杀掉后 9222 没有 page target，用 adb 把它拉起来（顺手开个 join 页恢复现场）。
+ *  注意：僵尸标签页也算 page —— 必须**探活**，不能只看有没有页面。 */
 async function ensurePhoneBrowser ()
 {
-    for ( let attempt = 0; attempt < 3; attempt++ )
+  for ( let attempt = 0; attempt < 3; attempt++ )
+  {
+    const live = await findLivePage( /.*/ );
+    if ( live ) return;
+    try
     {
-        try
-        {
-            const list = await fetch( 'http://localhost:9222/json' ).then( ( r ) => r.json() );
-            if ( list.some( ( t ) => t.type === 'page' ) ) return;
-        }
-        catch { /* devtools 还没起来 */ }
-        try
-        {
-            execFileSync( 'adb', [ '-s', SERIAL, 'shell', 'am', 'start', '-n', 'com.microsoft.emmx/com.microsoft.ruby.Main', '-a', 'android.intent.action.VIEW', '-d', `${ PHONE_BASE }/join.html` ], { timeout: 15000 } );
-        }
-        catch { /* 忽略，下面重试 */ }
-        await delay( 3500 );
+      execFileSync( 'adb', [ '-s', SERIAL, 'shell', 'am', 'start', '-n', 'com.microsoft.emmx/com.microsoft.ruby.Main', '-a', 'android.intent.action.VIEW', '-d', `${ PHONE_BASE }/join.html` ], { timeout: 15000 } );
     }
-    throw new Error( '手机浏览器（Edge）拉不起来：9222 没有 page target。请手动打开 Edge 再跑' );
+    catch { /* 忽略，下面重试 */ }
+    await delay( 3500 );
+  }
+  throw new Error( '手机浏览器（Edge）拉不起来：找不到渲染进程活着的页面。请手动打开 Edge 再跑' );
 }
 
 /** 唤醒手机屏幕并延长灭屏时间。
@@ -177,34 +193,34 @@ const readDomLog = ( cdp ) => evaluate( cdp, `(() => { const p=[...document.quer
  *  再用 CDP Page.navigate 导航到完整 URL。 */
 async function findLivePage ( urlPattern = /join\.html/ )
 {
-    for ( let round = 0; round < 12; round++ )
+  for ( let round = 0; round < 4; round++ )
+  {
+    let list = [];
+    try
     {
-        let list = [];
-        try
-        {
-            list = await fetch( 'http://localhost:9222/json' ).then( ( r ) => r.json() );
-        }
-        catch { await delay( 2500 ); continue; }
-        const candidates = list.filter( ( t ) => t.type === 'page' && urlPattern.test( t.url || '' ) )
-            // am start 新开的页 URL 最短（不带房间参数），排前面先探，少等僵尸页的超时
-            .sort( ( a, b ) => a.url.length - b.url.length );
-        for ( const tab of candidates )
-        {
-            try
-            {
-                const cdp = await connectCdp( tab.webSocketDebuggerUrl );
-                const rs = await Promise.race( [
-                    cdp.send( 'Runtime.enable' ).then( () => evaluate( cdp, 'document.readyState' ) ),
-                    delay( 4000 ).then( () => { throw new Error( 'timeout' ); } ),
-                ] );
-                if ( rs ) return tab;
-                cdp.close();
-            }
-            catch { /* 僵尸页，试下一个 */ }
-        }
-        await delay( 2500 );
+      list = await fetch( 'http://localhost:9222/json' ).then( ( r ) => r.json() );
     }
-    return null;
+    catch { await delay( 2500 ); continue; }
+    const candidates = list.filter( ( t ) => t.type === 'page' && urlPattern.test( t.url || '' ) )
+      // am start 新开的页 URL 最短（不带房间参数），排前面先探，少等僵尸页的超时
+      .sort( ( a, b ) => a.url.length - b.url.length );
+    for ( const tab of candidates )
+    {
+      try
+      {
+        const cdp = await connectCdp( tab.webSocketDebuggerUrl );
+        const rs = await Promise.race( [
+          cdp.send( 'Runtime.enable' ).then( () => evaluate( cdp, 'document.readyState' ) ),
+          delay( 3000 ).then( () => { throw new Error( 'timeout' ); } ),
+        ] );
+        if ( rs ) return tab;
+        cdp.close();
+      }
+      catch { /* 僵尸页，试下一个 */ }
+    }
+    await delay( 2500 );
+  }
+  return null;
 }
 
 /** 连上手机 Edge 的 CDP（adb forward 之后，9222 就是手机上的 devtools remote）。
@@ -594,6 +610,7 @@ if ( !chrome )
 
 await ensureDemoUp();
 ensureTunnels();
+await ensureCdpReachable();
 wakePhone();
 await ensurePhoneBrowser();
 console.log( `双端联调 · 场景：${ runList.join( ', ' ) }` );

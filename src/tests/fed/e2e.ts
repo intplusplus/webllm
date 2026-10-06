@@ -9,10 +9,10 @@
  * 期望结果是主机抓出来、剔除它、并如实记进账本 —— 这是信任层 v0 唯一的核心主张，
  * 必须有测试守住，否则它就只是一句宣传语。
  */
-import { LocalBus } from './bus';
-import { corpusDigest, pickProbe, type Corpus } from './corpus';
-import { detectKind } from './capability';
-import { FedNode, type ModelCard } from './node';
+import { LocalBus } from '../../fed/bus';
+import { corpusDigest, pickProbe, type Corpus } from '../../fed/corpus';
+import { detectKind } from '../../fed/capability';
+import { FedNode, type ModelCard } from '../../fed/node';
 import {
   decodeWeights,
   encodeWeights,
@@ -21,8 +21,8 @@ import {
   type ControlMessage,
   type MlpModelSpec,
   type RoomManifest,
-} from './protocol';
-import type { PeerInfo } from './transport';
+} from '../../fed/protocol';
+import type { PeerInfo } from '../../fed/transport';
 
 export interface E2EResult
 {

@@ -1,5 +1,5 @@
-import type { GpuContext } from '../gpu/device';
-import { BpeTokenizer } from '../tokenizer/bpe';
+import type { GpuContext } from '../../gpu/device';
+import { BpeTokenizer } from '../../tokenizer/bpe';
 
 /** 覆盖多语言 / 空白 / emoji / 控制字节 / 长词等边界。 */
 const CORPUS: string[] = [

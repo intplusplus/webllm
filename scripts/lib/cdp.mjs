@@ -49,8 +49,10 @@ export async function connectCdp ( wsUrl )
 
   await new Promise( ( resolve, reject ) =>
   {
-    ws.addEventListener( 'open', () => resolve(), { once: true } );
-    ws.addEventListener( 'error', () => reject( new Error( 'CDP 连接失败：' + wsUrl ) ), { once: true } );
+    // 硬超时：对端渲染进程是僵尸时，ws 可能既不 open 也不 error，干等会挂住整个脚本
+    const timer = setTimeout( () => reject( new Error( `CDP 连接超时：${ wsUrl }` ) ), 5000 );
+    ws.addEventListener( 'open', () => { clearTimeout( timer ); resolve(); }, { once: true } );
+    ws.addEventListener( 'error', () => { clearTimeout( timer ); reject( new Error( 'CDP 连接失败：' + wsUrl ) ); }, { once: true } );
   } );
 
   return {

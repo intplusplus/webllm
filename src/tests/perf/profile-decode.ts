@@ -1,10 +1,10 @@
-import type { GpuContext } from '../gpu/device';
-import { readBatchProfile } from '../gpu/pipeline';
-import { loadQwenWeights } from '../weights/qwen-loader';
-import { QwenGpt, planGemvSplit } from '../model/qwen';
-import { QWEN25_05B } from '../model/qwen-config';
-import { BpeTokenizer } from '../tokenizer/bpe';
-import { buildQwenChatText } from '../infer/qwen-generate';
+import type { GpuContext } from '../../gpu/device';
+import { readBatchProfile } from '../../gpu/pipeline';
+import { loadQwenWeights } from '../../weights/qwen-loader';
+import { QwenGpt, planGemvSplit } from '../../model/qwen';
+import { QWEN25_05B } from '../../model/qwen-config';
+import { BpeTokenizer } from '../../tokenizer/bpe';
+import { buildQwenChatText } from '../../infer/qwen-generate';
 
 /**
  * M5 诊断：解码一步的逐 pass 耗时剖析（timestamp-query）。

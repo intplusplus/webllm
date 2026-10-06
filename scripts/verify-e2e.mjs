@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 端到端联邦训练测试的运行器。
  * 用法： npm run verify:e2e
  */
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { bundleAndImport } from './lib/bundle.mjs';
 
 const root = path.resolve( path.dirname( fileURLToPath( import.meta.url ) ), '..' );
-const { runFedE2E } = await bundleAndImport( root, 'src/fed/e2e.ts', 'e2e' );
+const { runFedE2E } = await bundleAndImport( root, 'src/tests/fed/e2e.ts', 'e2e' );
 const text = fs.readFileSync( path.join( root, 'public', 'data', 'tinyshakespeare.txt' ), 'utf8' );
 
 console.log( `公共训练网络 · 联邦训练端到端测试（3 节点房间，其中 1 个谎报 probeLoss）\n` );

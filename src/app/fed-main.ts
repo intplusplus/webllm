@@ -9,7 +9,7 @@
  * 为什么要分开：让一个人在同一页里既当房主又当节点，结果就是谁都不知道
  * 自己现在该点哪个按钮。职责不同，页面就该不同。
  */
-import { renderFedApp } from './ui/fed-app';
+import { renderFedApp } from '../ui/fed-app';
 
 const app = document.querySelector<HTMLDivElement>( '#app' );
 if ( !app ) throw new Error( '缺少 #app 容器' );
