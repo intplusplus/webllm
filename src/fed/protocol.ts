@@ -43,6 +43,35 @@ export interface GpuModelSpec
 /** 模型规格 —— 写进 manifest，所有节点据此构造完全相同的初始模型。 */
 export type ModelSpec = MlpModelSpec | GpuModelSpec;
 
+/**
+ * 模型规模档位。
+ *
+ * 为什么要有它：太小（快测档）一轮不到一秒就跑完，loss 基本不动，
+ * 根本看不清「训练到底在干嘛」。给三档让人按目的选：
+ *   small  —— 验证链路 / 自动化测试（快）
+ *   medium —— **默认**。loss 能明显往下走、一轮要几秒，看得见过程
+ *   large  —— 想认真观察收敛曲线时用
+ */
+export type ModelPreset = 'small' | 'medium' | 'large';
+
+export const MODEL_PRESETS: Record<ModelPreset, { label: string; mlp: Omit<MlpModelSpec, 'engine' | 'vocabSize' | 'seed'>; gpu: Omit<GpuModelSpec, 'engine' | 'vocabSize' | 'seed'> }> = {
+  small: {
+    label: '小 —— 快速验证链路（一轮不到 1 秒）',
+    mlp: { ctx: 8, embDim: 16, hidden: 64 },
+    gpu: { blockSize: 32, nLayer: 2, nHead: 2, nEmbd: 64, bias: true, maxBatch: 8 },
+  },
+  medium: {
+    label: '中 —— 默认。能看清 loss 在下降',
+    mlp: { ctx: 16, embDim: 48, hidden: 192 },
+    gpu: { blockSize: 64, nLayer: 3, nHead: 3, nEmbd: 96, bias: true, maxBatch: 8 },
+  },
+  large: {
+    label: '大 —— 认真观察收敛曲线（每轮更久）',
+    mlp: { ctx: 32, embDim: 96, hidden: 384 },
+    gpu: { blockSize: 96, nLayer: 4, nHead: 4, nEmbd: 128, bias: true, maxBatch: 8 },
+  },
+};
+
 /** 上下文长度：两种引擎叫法不同，但语义一样，统一走这个函数。 */
 export function specContext ( spec: ModelSpec ): number
 {
@@ -208,19 +237,24 @@ export interface RoundStats
 /**
  * 控制帧联合类型。
  *
- * 房间的权威在房主（host）：
- *   房主  → assign    下发最终任务（含协商后的引擎与全部参数）
+ * 房间的权威在房主（host），但**成员是动态的**：
+ *   房主  → assign    下发任务（含协商后的引擎与全部参数）
  *   节点  → ready     确认「模型已建好、随时能训」，或说明为什么不行
+ *   房主  → sync      「你中途加入，这是当前全局权重」——紧随其后一帧二进制权重
  *   房主  → round/open, [权重], round/close   驱动每一轮
  *
- * ready 这一步是关键：没有它，房主只知道「对方连着」，不知道「对方训得动」，
- * 于是只能靠每轮超时去发现 —— 那正是「两边不同步 + 主机报超时」的来源。
+ * 两个关键点：
+ *   1. ready —— 没有它，房主只知道「对方连着」，不知道「对方训得动」，
+ *      只能靠每轮超时去发现，那就是「两边不同步 + 号称超时」的来源。
+ *   2. sync —— **中途加入的节点必须拿到当前全局权重**。否则它拿自己那份
+ *      随机初始权重当基准，算出的增量是错的，聚合进去会污染全局模型。
+ *      这是「随时加入不影响训练」能成立的唯一前提。
  */
 export type ControlMessage =
   | { t: 'hello'; peerId: string; name: string; device: DevCap }
   | { t: 'assign'; shardIndex: number; manifest: RoomManifest }
   | { t: 'ready'; peerId: string; ok: boolean; engine: EngineId; reason?: string }
-  | { t: 'busy'; round: number }
+  | { t: 'sync'; round: number }
   | { t: 'round/open'; round: number }
   | { t: 'round/close'; stats: RoundStats }
   | { t: 'credit'; peerId: string; chars: number; digest: string }

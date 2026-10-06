@@ -108,6 +108,14 @@ function decodeFrames ( buf, onText, onClose, onPing )
 /** roomId → Map(peerId → { peer, sock, alive, frag }) */
 const rooms = new Map();
 
+/**
+ * roomId → 房间的「自我介绍」（房主上报）。
+ * 用途：让加入方在界面上直接看到有哪些房间、各是什么任务、用什么引擎、几个人，
+ * 点一下就能进 —— 不用手打房间号，也不用猜。
+ * 信令服务器依然只做转发与只读展示，不参与任何房间逻辑。
+ */
+const roomMeta = new Map();
+
 function roomOf ( roomId, create = false )
 {
   let r = rooms.get( roomId );
@@ -148,7 +156,11 @@ function leaveRoom ( roomId, peerId, quiet = false )
   const entry = r.get( peerId );
   if ( !entry ) return;
   r.delete( peerId );
-  if ( r.size === 0 ) rooms.delete( roomId );
+  if ( r.size === 0 )
+  {
+    rooms.delete( roomId );
+    roomMeta.delete( roomId ); // 房间空了，自我介绍也一并清掉
+  }
   if ( !quiet )
   {
     console.log( `  ← ${ peerId.slice( 0, 8 ) } 离开 ${ roomId }（房间余 ${ roomOf( roomId )?.size ?? 0 } 人）` );
@@ -163,7 +175,19 @@ function stats ()
   const list = [];
   for ( const [ roomId, m ] of rooms )
   {
-    list.push( { roomId, peers: [ ...m.values() ].map( ( e ) => ( { peerId: e.peer.peerId, name: e.peer.name, role: e.peer.role, kind: e.peer.device?.kind } ) ) } );
+    const peers = [ ...m.values() ].map( ( e ) => ( {
+      peerId: e.peer.peerId,
+      name: e.peer.name,
+      role: e.peer.role,
+      kind: e.peer.device?.kind,
+      gpuOk: e.peer.device?.gpuOk === true,
+    } ) );
+    list.push( {
+      roomId,
+      meta: roomMeta.get( roomId ) ?? null,
+      peers,
+      hasHost: peers.some( ( p ) => p.role === 'host' ),
+    } );
   }
   return list;
 }
@@ -174,10 +198,23 @@ export function startSignalServer ( port = DEFAULT_PORT )
 {
   const server = http.createServer( ( req, res ) =>
   {
+    // 页面在 vite 的另一个端口上，所以列表接口必须允许跨源。
+    const cors = { 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
+    const asJson = ( obj ) =>
+    {
+      res.writeHead( 200, { 'content-type': 'application/json; charset=utf-8', ...cors } );
+      res.end( JSON.stringify( obj ) );
+    };
+
+    if ( req.url?.split( '?' )[ 0 ] === '/rooms' )
+    {
+      // 加入方用它做「挑房间」：房间号 / 任务名 / 引擎 / 人数 / 有没有房主
+      asJson( { ok: true, rooms: stats() } );
+      return;
+    }
     if ( req.url === '/health' )
     {
-      res.writeHead( 200, { 'content-type': 'application/json; charset=utf-8' } );
-      res.end( JSON.stringify( { ok: true, rooms: stats() } ) );
+      asJson( { ok: true, rooms: stats() } );
       return;
     }
     res.writeHead( 200, { 'content-type': 'text/plain; charset=utf-8' } );
@@ -240,6 +277,13 @@ export function startSignalServer ( port = DEFAULT_PORT )
               send( sock, { t: 'joined', peers: existing } );
               broadcast( roomId, { t: 'peer-joined', peer: msg.peer }, peerId );
               console.log( `  → ${ peerId.slice( 0, 8 ) }（${ msg.peer.role }，${ msg.peer.device?.kind ?? '?' }）加入 ${ roomId }，房间现有 ${ r.size } 人` );
+              return;
+            }
+
+            if ( msg.t === 'announce' )
+            {
+              // 房主上报房间自我介绍（任务名 / 引擎 / 轮次…），供「挑房间」列表展示
+              if ( msg.room && typeof msg.room === 'object' ) roomMeta.set( roomId, msg.room );
               return;
             }
 

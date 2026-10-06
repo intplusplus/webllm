@@ -388,6 +388,46 @@ pre.fed-log
   word-break: break-all;
 }
 
+/* 开放房间列表：加入方点一下就进 */
+.fed-roomlist
+{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+
+.fed-roomitem
+{
+  appearance: none;
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 11px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fed-roomitem:hover
+{
+  border-color: var(--accent);
+  background: #141d2c;
+}
+
+.fed-roomitem .hint
+{
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
 .fed-capbox b
 {
   color: var(--text);

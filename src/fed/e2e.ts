@@ -266,9 +266,9 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
   check( '模型卡记录了贡献者与流量', card.contributors.length === 3 && card.transportBytes > 0,
     `贡献者 ${ card.contributors.length } 人，传输 ${ ( card.transportBytes / 1024 ).toFixed( 1 ) } KB，参数量 ${ card.paramCount.toLocaleString() }` );
 
-  // --- 开训后锁房：迟到的节点必须被明确拒绝，而不是静默旁观 ---
-  // 没有这一条，就会出现「房主跑到第 3 轮、手机还停在第 0 轮」这种错位 ——
-  // 用户看到的是「两边不同步」，而且不知道为什么。
+  // --- 随时加入：训练跑完之后才连上的节点，必须被**对齐到当前全局权重** ---
+  // 这是「随时加入不影响训练」的核心不变量。新节点若拿自己那份随机初始权重当基准，
+  // 它算出的 Δ 就是错的，聚合进去会污染全局模型 —— 而且账本上看不出异常。
   const peerD: PeerInfo = {
     peerId: 'dddd0004',
     name: '迟到节点',
@@ -279,10 +279,18 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
   const boxD = makeBox( manifest.roomId, peerD, ( o ) => new LocalBus( o ) );
   boxD.node = new FedNode( { role: 'peer', transport: boxD.bus, events: makeEvents( boxD ), corpus, contributionText: '' } );
   await boxD.bus.connect();
-  await delay( 250 );
-  check( '开训后加入的节点被明确拒绝，不会默默跟着跑',
-    boxD.statuses.some( ( s ) => s.includes( '房间已锁定' ) ) && boxD.node.currentManifest === null,
-    `节点最后状态「${ boxD.statuses[ boxD.statuses.length - 1 ] ?? '（无）' }」，清单=${ boxD.node.currentManifest ? '有' : '无' }` );
+  await delay( 400 );
+
+  const dSaw = boxD.statuses.filter( ( s ) => s.includes( '参与' ) ).slice( -1 )[ 0 ];
+  check( '训练开始后加入的节点被接受并下发任务（不再是「被拒绝」）',
+    boxD.node.currentManifest !== null && boxD.statuses.some( ( s ) => s.includes( '从下一轮开始参与' ) ),
+    `状态「${ dSaw ?? '（无）' }」，清单=${ boxD.node.currentManifest ? '有' : '无' }` );
+
+  const digD = weightsDigest( await boxD.node.engineRef.getWeights() );
+  check( '迟到节点被对齐到当前全局权重，而不是自己的随机初始权重',
+    digD === digA && digD !== initialDigest,
+    `迟到节点 ${ digD } / 房主 ${ digA } / 初始 ${ initialDigest }` );
+
   boxD.bus.close();
   await delay( 40 );
 

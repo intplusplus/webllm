@@ -12,11 +12,13 @@ import './fed.css';
 import { corpusDigest, loadBuiltinCorpus, pickProbe, type Corpus } from '../fed/corpus';
 import {
   fingerprintOf,
+  MODEL_PRESETS,
   specLabel,
   type AggregateSpec,
   type ControlMessage,
   type DevCap,
   type LedgerEntry,
+  type ModelPreset,
   type ModelSpec,
   type RoomManifest,
   type RoundStats,
@@ -128,11 +130,20 @@ export function renderFedApp ( root: HTMLElement ): void
   cardConnect.append( h1 );
 
   const rowRoom = el( 'div', 'fed-row' );
-  rowRoom.append( el( 'label', undefined, '房间 ID' ) );
+  rowRoom.append( el( 'label', undefined, '房间号' ) );
   const inRoom = el( 'input', 'fed-input' ) as HTMLInputElement;
-  inRoom.value = qp( 'room' ) ?? 'wifi-lab';
+  // 默认给一个随机短号：让每个房主都开**自己的**房间，
+  // 别让所有人都挤在同一个写死的默认号里（两台手机抢一个房间的混乱就是这么来的）。
+  inRoom.value = qp( 'room' ) ?? `room-${ randomId().slice( 0, 4 ) }`;
   rowRoom.append( inRoom );
   cardConnect.append( rowRoom );
+
+  // 开放房间列表：加入方直接点一下就进，不用手打、也不用猜房主用了什么号。
+  // 数据来自信令服务器（它本来就认识所有房间，只是把名单读出来给人看）。
+  const btnRooms = el( 'button', 'fed-btn', '刷新开放房间' ) as HTMLButtonElement;
+  const roomsBox = el( 'div', 'fed-roomlist' );
+  cardConnect.append( btnRooms );
+  cardConnect.append( roomsBox );
 
   const rowMode = el( 'div', 'fed-row' );
   rowMode.append( el( 'label', undefined, '联机方式' ) );
@@ -249,10 +260,33 @@ export function renderFedApp ( root: HTMLElement ): void
   cardPeers.append( peerWrap );
   root.append( cardPeers );
 
-  // 5 · 训练
+  // 5 · 训练（这里就是「房间设计」：房主定引擎、模型规模、数据量、超参）
   const cardTrain = el( 'section', 'fed-card' );
-  const h5 = el( 'h2' ); h5.append( el( 'span', 'idx', '5' ), el( 'span', undefined, '训练' ) );
+  const h5 = el( 'h2' ); h5.append( el( 'span', 'idx', '5' ), el( 'span', undefined, '房间设计' ) );
   cardTrain.append( h5 );
+  const designHint = el( 'p', 'hint', '由房主定义，开训时写进任务清单下发给所有节点。' );
+  cardTrain.append( designHint );
+
+  const rowTask = el( 'div', 'fed-row' );
+  rowTask.append( el( 'label', undefined, '任务名' ) );
+  const inTask = el( 'input', 'fed-input' ) as HTMLInputElement;
+  inTask.value = qp( 'task' ) ?? '字符级语言模型 · 联邦预训练';
+  rowTask.append( inTask );
+  cardTrain.append( rowTask );
+
+  const rowPreset = el( 'div', 'fed-row' );
+  rowPreset.append( el( 'label', undefined, '模型规模' ) );
+  const inPreset = el( 'select', 'fed-input' ) as HTMLSelectElement;
+  for ( const [ value, p ] of Object.entries( MODEL_PRESETS ) )
+  {
+    const opt = el( 'option' ) as HTMLOptionElement;
+    opt.value = value;
+    opt.textContent = p.label;
+    inPreset.append( opt );
+  }
+  inPreset.value = qp( 'preset' ) ?? 'medium';
+  rowPreset.append( inPreset );
+  cardTrain.append( rowPreset );
 
   const rowParams = el( 'div', 'fed-row' );
   // ?quick=1 给出一个跑得快的小配置（演示/自动化测试用）
@@ -386,6 +420,11 @@ export function renderFedApp ( root: HTMLElement ): void
     modeHint.textContent = local
       ? '本机模式：同一个浏览器再开一个标签页，填同一个房间 ID，两边就能互相训练。全程走 BroadcastChannel，不需要任何服务器。'
       : '跨设备模式：手机与电脑在同一 WiFi 下，手机打开终端里打印的局域网地址，填同一个房间 ID 加入即可。需要信令服务器（npm run demo 会一起起）。';
+    // 本机总线没有服务器，自然也就没有「房间列表」这回事
+    btnRooms.style.display = local ? 'none' : '';
+    roomsBox.style.display = local ? 'none' : '';
+    if ( local ) roomsBox.innerHTML = '';
+    else void refreshRooms();
     renderCapability( cap, null );
     syncRole();
   }
@@ -400,7 +439,7 @@ export function renderFedApp ( root: HTMLElement ): void
   {
     const isPeer = role === 'peer';
     const inputs: Array<HTMLInputElement | HTMLSelectElement> = [
-      inRounds[ 1 ], inSteps[ 1 ], inBatch[ 1 ], inLr[ 1 ], inShards[ 1 ], inAgg, inCross, inEngine,
+      inRounds[ 1 ], inSteps[ 1 ], inBatch[ 1 ], inLr[ 1 ], inShards[ 1 ], inAgg, inCross, inEngine, inPreset, inTask,
     ];
     for ( const i of inputs )
     {
@@ -412,6 +451,84 @@ export function renderFedApp ( root: HTMLElement ): void
       : isPeer
         ? '你是参与节点：引擎与全部训练参数由房主下发，本机只上报能力并执行。'
         : '你是房主：引擎策略与全部参数由你定义；开训时会按全网能力再复核一次引擎，然后下发给各节点。';
+  }
+
+  /** 信令地址 → HTTP 地址（同一个服务器，同一个端口，只是协议不同）。 */
+  function signalHttpBase (): string
+  {
+    return inSignal.value.replace( /^ws/, 'http' ).replace( /\/+$/, '' );
+  }
+
+  interface RoomBrief
+  {
+    roomId: string;
+    hasHost: boolean;
+    meta: { taskName?: string; engine?: string; preset?: string } | null;
+    peers: Array<{ name: string; kind?: string; role: string; gpuOk?: boolean }>;
+  }
+
+  /**
+   * 拉开放房间列表。
+   *
+   * 为什么值得做：加入方最自然的动作是「看看有哪些房间、点一个进去」，
+   * 而不是「猜房主用了什么号再手打一遍」。信令服务器本来就认识所有房间，
+   * 这里只是把名单读出来给人看 —— 它仍然不做任何房间逻辑。
+   */
+  async function refreshRooms (): Promise<void>
+  {
+    roomsBox.innerHTML = '';
+    roomsBox.append( el( 'div', 'hint', '正在拉取房间列表…' ) );
+    try
+    {
+      const res = await fetch( `${ signalHttpBase() }/rooms` );
+      if ( !res.ok ) throw new Error( `HTTP ${ res.status }` );
+      const data = await res.json() as { rooms: RoomBrief[] };
+      roomsBox.innerHTML = '';
+      const open = data.rooms.filter( ( r ) => r.peers.length > 0 );
+      if ( open.length === 0 )
+      {
+        roomsBox.append( el( 'div', 'hint', '现在没有开放的房间。在任一台设备上点「创建训练房间」即可。' ) );
+        return;
+      }
+      for ( const r of open )
+      {
+        const item = el( 'button', 'fed-roomitem' ) as HTMLButtonElement;
+        const parts = [
+          r.meta?.taskName ?? '未命名任务',
+          `引擎 ${ r.meta?.engine ?? '?' }`,
+          `${ r.peers.length } 人`,
+          r.hasHost ? '房主在' : '无房主',
+        ];
+        item.append( el( 'b', undefined, r.roomId ) );
+        item.append( el( 'span', 'hint', '  ' + parts.join(' · ') ) );
+        item.onclick = () =>
+        {
+          inRoom.value = r.roomId;
+          addLog( `已选择房间 ${ r.roomId }（${ r.meta?.taskName ?? '' }）` );
+        };
+        roomsBox.append( item );
+      }
+    }
+    catch ( err )
+    {
+      roomsBox.innerHTML = '';
+      roomsBox.append( el( 'div', 'hint', `拿不到房间列表（信令服务器没开？）：${ ( err as Error ).message }` ) );
+    }
+  }
+
+  /**
+   * 向信令服务器上报房间的「自我介绍」，供其它设备在列表里看到。
+   * 只是只读展示；房间的一切逻辑仍由房主自己驱动。
+   */
+  function announceRoom ( engine: string ): void
+  {
+    if ( !manifest ) return;
+    transport?.announce?.( {
+      taskName: manifest.taskName,
+      engine,
+      preset: inPreset.value,
+      mode: inMode.value,
+    } );
   }
 
   /**
@@ -872,24 +989,24 @@ export function renderFedApp ( root: HTMLElement ): void
       ? engineOverride === 'gpu-tinygpt'
       : ( inEngine.value !== 'cpu' && cap?.adapterOk === true );
 
+    // 模型规模由房主在「房间设计」里选。两种引擎各有一套对应规格，
+    // 但**同一档位**的语义是一致的：small=快速验证，medium=能看清 loss 在动，large=认真观察。
+    const preset: ModelPreset = ( inPreset.value in MODEL_PRESETS )
+      ? ( inPreset.value as ModelPreset )
+      : 'medium';
+    const dims = MODEL_PRESETS[ preset ];
+
     const model: ModelSpec = useGpu
       ? {
         engine: 'gpu-tinygpt',
         vocabSize: corpusRef.vocab.length,
-        blockSize: 32,
-        nLayer: 2,
-        nHead: 2,
-        nEmbd: 64,
-        bias: true,
-        maxBatch: 8,
+        ...dims.gpu,
         seed: 20261006,
       }
       : {
         engine: 'mlp',
         vocabSize: corpusRef.vocab.length,
-        ctx: 8,
-        embDim: 16,
-        hidden: 64,
+        ...dims.mlp,
         seed: 20261006,
       };
 
@@ -901,7 +1018,7 @@ export function renderFedApp ( root: HTMLElement ): void
 
     const base = {
       roomId: inRoom.value.trim() || 'room',
-      taskName: useGpu ? '字符级语言模型 · WebGPU tiny-GPT' : '字符级语言模型 · 联邦预训练',
+      taskName: inTask.value.trim() || '字符级语言模型 · 联邦预训练',
       taskBrief: '各节点在自己的语料分片上本地训练，按样本数加权聚合，合出一个全局语言模型。',
       model,
       engineReason: engineReason
@@ -996,7 +1113,8 @@ export function renderFedApp ( root: HTMLElement ): void
     if ( wantRole === 'host' )
     {
       addLog( `清单指纹 ${ m!.fingerprint }（模型 vocab ${ m!.model.vocabSize } · 分片 ${ m!.shards }）` );
-      setStatus( '房间已创建 —— 手机在同一 WiFi 下打开本页并加入，然后点「开始训练」' );
+      announceRoom( m!.model.engine );
+      setStatus( `房间已创建（房间号 ${ roomId }）—— 加入方在「刷新开放房间」里点一下就能进；然后你点「开始训练」` );
     }
     else
     {
@@ -1044,6 +1162,7 @@ export function renderFedApp ( root: HTMLElement ): void
     setStatus( '已断开' );
     addLog( '已断开与房间的连接' );
   };
+  btnRooms.onclick = () => void refreshRooms();
   btnStart.onclick = () =>
   {
     if ( !node ) return;

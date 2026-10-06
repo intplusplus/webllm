@@ -48,6 +48,11 @@ export interface Transport
   sendControl ( peerId: string, msg: object ): boolean;
   /** 广播，except 用于排除发送者自身；返回送达数 */
   broadcast ( data: string | ArrayBuffer, except?: string ): number;
+  /**
+   * 向信令服务器上报房间的「自我介绍」，供其它设备在「挑房间」列表里看到。
+   * 可选：只有走信令的 RoomTransport 支持；本机总线（LocalBus）没有服务器，用不上。
+   */
+  announce? ( room: Record<string, unknown> ): void;
   close (): void;
 }
 
@@ -464,6 +469,12 @@ export class RoomTransport implements Transport
   sendControl ( peerId: string, msg: object ): boolean
   {
     return this.send( peerId, JSON.stringify( msg ) );
+  }
+
+  /** 房间自我介绍：信令服务器只做只读展示，供其它设备「挑房间」。 */
+  announce ( room: Record<string, unknown> ): void
+  {
+    this.post( { t: 'announce', room } );
   }
 
   /** 广播；except 用于排除发送者自身。返回成功送达的连接数。 */
