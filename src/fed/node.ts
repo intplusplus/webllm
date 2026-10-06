@@ -39,7 +39,7 @@ import {
   type RoundStats,
   type WeightMeta,
 } from './protocol';
-import type { PeerInfo, RoomTransport } from './transport';
+import type { PeerInfo, Transport } from './transport';
 
 const PROBE_EVAL_COUNT = 256;
 const VERIFY_TOL = 1e-3;
@@ -88,7 +88,7 @@ export interface NodeEvents
 export interface NodeOptions
 {
   role: 'host' | 'peer';
-  transport: RoomTransport;
+  transport: Transport;
   events: NodeEvents;
   corpus: Corpus;
   /** 用户贡献的文本（可为空）；并入本节点本地训练池 */
@@ -619,7 +619,8 @@ export class FedNode
 
 function sleep ( ms: number ): Promise<void>
 {
-  return new Promise( ( r ) => window.setTimeout( r, ms ) );
+  // 用 globalThis 而非 window：同一份编排代码要能在浏览器与 Node（无头端到端测试）里跑
+  return new Promise( ( r ) => globalThis.setTimeout( r, ms ) );
 }
 
 /** 根据 UA 粗判设备类别（仅用于展示）。 */

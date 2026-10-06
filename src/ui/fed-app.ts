@@ -19,7 +19,8 @@ import {
   type RoomManifest,
   type RoundStats,
 } from '../fed/protocol';
-import { RoomTransport, type PeerInfo } from '../fed/transport';
+import { RoomTransport, type PeerInfo, type Transport } from '../fed/transport';
+import { LocalBus } from '../fed/bus';
 import { detectKind, FedNode, type ModelCard, type NodeEvents } from '../fed/node';
 
 // ------------------------------------------------------------------ 小工具
@@ -82,7 +83,7 @@ export function renderFedApp ( root: HTMLElement ): void
   // ---------- 状态 ----------
   let corpus: Corpus | null = null;
   let node: FedNode | null = null;
-  let transport: RoomTransport | null = null;
+  let transport: Transport | null = null;
   let manifest: RoomManifest | null = null;
   let role: 'host' | 'peer' | null = null;
   let busy = false;
@@ -110,6 +111,26 @@ export function renderFedApp ( root: HTMLElement ): void
   inRoom.value = 'wifi-lab';
   rowRoom.append( inRoom );
   cardConnect.append( rowRoom );
+
+  const rowMode = el( 'div', 'fed-row' );
+  rowMode.append( el( 'label', undefined, '联机方式' ) );
+  const inMode = el( 'select', 'fed-input' ) as HTMLSelectElement;
+  for ( const [ value, text ] of [
+    [ 'webrtc', '跨设备（WebRTC，需信令服务器）' ],
+    [ 'local', '本机多标签页（免服务器）' ],
+  ] as Array<[ string, string ]> )
+  {
+    const opt = el( 'option' ) as HTMLOptionElement;
+    opt.value = value;
+    opt.textContent = text;
+    inMode.append( opt );
+  }
+  inMode.value = 'webrtc';
+  rowMode.append( inMode );
+  cardConnect.append( rowMode );
+
+  const modeHint = el( 'p', 'hint', '' );
+  cardConnect.append( modeHint );
 
   const rowSig = el( 'div', 'fed-row' );
   rowSig.append( el( 'label', undefined, '信令地址' ) );
@@ -268,6 +289,17 @@ export function renderFedApp ( root: HTMLElement ): void
   }
 
   // ---------- 渲染辅助 ----------
+
+  function syncMode (): void
+  {
+    const local = inMode.value === 'local';
+    inSignal.disabled = local;
+    inSignal.style.opacity = local ? '0.45' : '1';
+    inSignal.parentElement?.querySelector( 'label' )?.setAttribute( 'style', local ? 'opacity:0.45' : '' );
+    modeHint.textContent = local
+      ? '本机模式：同一个浏览器再开一个标签页，填同一个房间 ID，两边就能互相训练。全程走 BroadcastChannel，不需要任何服务器。'
+      : '跨设备模式：手机与电脑在同一 WiFi 下，手机打开终端里打印的局域网地址，填同一个房间 ID 加入即可。需要信令服务器（npm run demo 会一起起）。';
+  }
 
   function setStatus ( t: string ): void
   {
@@ -636,18 +668,21 @@ export function renderFedApp ( root: HTMLElement ): void
     role = wantRole;
     addLog( `以 ${ wantRole === 'host' ? '主机' : '节点' } 身份加入房间 ${ roomId }（我的 ID ${ self.peerId.slice( 0, 8 ) }）` );
 
-    const t = new RoomTransport( {
-      signalUrl: inSignal.value.trim(),
-      roomId,
-      self,
-      onControl: ( peerId, msg ) => node?.onControl( peerId, msg as unknown as ControlMessage ),
-      onBinary: ( peerId, buf ) => node?.onBinary( peerId, buf ),
-      onPeerOpen: ( peerId ) => node?.onPeerOpen( peerId ),
-      onPeerClose: ( peerId ) => node?.onPeerClose( peerId ),
-      onRoster: ( peers ) => node?.onRoster( peers ),
-      onStatus: ( s ) => setStatus( s ),
-    } );
+    const callbacks = {
+      onControl: ( peerId: string, msg: unknown ): void => node?.onControl( peerId, msg as ControlMessage ),
+      onBinary: ( peerId: string, buf: ArrayBuffer ): void => node?.onBinary( peerId, buf ),
+      onPeerOpen: ( peerId: string ): void => node?.onPeerOpen( peerId ),
+      onPeerClose: ( peerId: string ): void => node?.onPeerClose( peerId ),
+      onRoster: ( peers: PeerInfo[] ): void => node?.onRoster( peers ),
+      onStatus: ( s: string ): void => setStatus( s ),
+    };
+
+    const useLocal = inMode.value === 'local';
+    const t: Transport = useLocal
+      ? new LocalBus( { roomId, self, ...callbacks } )
+      : new RoomTransport( { signalUrl: inSignal.value.trim(), roomId, self, ...callbacks } );
     transport = t;
+    addLog( useLocal ? '使用本机总线（BroadcastChannel），无需信令服务器' : `使用 WebRTC，信令 ${ inSignal.value.trim() }` );
     setBusy( true );
     btnLeave.disabled = false;
     await t.connect();
@@ -749,6 +784,8 @@ export function renderFedApp ( root: HTMLElement ): void
 
   drawChart();
   setBusy( false );
+  syncMode();
+  inMode.onchange = syncMode;
 
   void ( async () =>
   {

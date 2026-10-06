@@ -25,6 +25,32 @@ export interface PeerInfo
 
 export type Role = 'host' | 'peer';
 
+/**
+ * 传输层统一接口。
+ *
+ * 有两种实现：
+ *   - RoomTransport：WebRTC，跨设备（PC ↔ 手机），需要信令服务器牵线
+ *   - LocalBus：BroadcastChannel，同一浏览器的多个标签页，**零服务器**
+ *
+ * 上层（FedNode / UI）只依赖这个接口，因此换传输不需要改训练逻辑。
+ */
+export interface Transport
+{
+  readonly selfId: string;
+  readonly isHost: boolean;
+  /** 房间内其它节点（不含自己） */
+  readonly peerInfos: PeerInfo[];
+  /** 当前通道已就绪的节点 id */
+  readonly openPeerIds: string[];
+  /** 建立底层通道：WebRTC 走信令握手，LocalBus 打开 BroadcastChannel */
+  connect (): Promise<void>;
+  send ( peerId: string, data: string | ArrayBuffer ): boolean;
+  sendControl ( peerId: string, msg: object ): boolean;
+  /** 广播，except 用于排除发送者自身；返回送达数 */
+  broadcast ( data: string | ArrayBuffer, except?: string ): number;
+  close (): void;
+}
+
 interface SignalFrame
 {
   t: string;
@@ -110,7 +136,7 @@ export interface TransportOptions
   onStatus: ( text: string ) => void;
 }
 
-export class RoomTransport
+export class RoomTransport implements Transport
 {
   private readonly opts: TransportOptions;
   private ws: WebSocket | null = null;
