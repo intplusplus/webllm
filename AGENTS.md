@@ -35,6 +35,7 @@ src/fed/         公共训练网络：protocol / engine(+gpu-engine) / node(编�
 src/tests/       页面自检注册表（kernels+model = 44 项）+ {ops,train,infer,qwen,perf}/ 分组 + fed/(无头与端到端)
 scripts/         自检与工具：verify-*.mjs / signal-server / start-demo / build-standalone / lib/{cdp,bundle,cert}
 docs/            权威文档（先读 docs/架构总览.md）
+prototype/       交互原型（非构建产物，纯静态 HTML）：index.html 全景 / room.html 训练房间 v1
 ```
 
 ## 常用命令
