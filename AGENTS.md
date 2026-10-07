@@ -11,8 +11,7 @@ webllm：浏览器内自研 LLM 引擎（WebGPU + WGSL，TypeScript + Vite），
 tiny-GPT 训练闭环与 Qwen2.5-0.5B int4 推理；第二条线是**公共训练网络**：
 PC 与手机同一 WiFi 下打开网页即可联邦训练同一个模型（P2P、数据不出本地）。
 
-> 目录职责：`PLAN.md` 是**实施入口**（接下来做什么、怎么验收）；
-> `design/` 是**权威设计稿**（v3.1 目标态，先读 `design/README.md`）；
+> 目录职责：`design/` 是**权威设计稿**（v3.1 目标态，先读 `design/README.md`）；
 > `docs/` 存**现状与记录**（架构总览/实测/bug/联调/设计评审记录）。
 > 二者冲突时 design 定义目标，docs 描述现状。
 

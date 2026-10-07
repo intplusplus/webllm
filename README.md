@@ -164,20 +164,12 @@ DPO margin 0→5.1。解码吞吐从 1.2 → 10+ tokens/s，实测数据见
 ## AI / Harness 入口
 
 给任何 AI 编码助手的项目操作手册在仓库根 [AGENTS.md](AGENTS.md)（验证矩阵、真机联调
-SOP、工程不变量、无效手段黑名单）。各 harness 的薄适配（同源，避免多处漂移）：
+SOP、工程不变量、无效手段黑名单）。需要的工具适配（同源，避免多处漂移）：
 
-| Harness | 入口 |
+| 工具 | 入口 |
 |---|---|
-| 通用（Codex/Jules/Zed/OpenHands…） | `AGENTS.md` |
+| 通用（WorkBuddy / Codex / Jules / Zed / OpenHands…） | `AGENTS.md` |
 | Trae | `.trae/skills/webllm-dev-loop/` |
-| Claude Code | `CLAUDE.md`（`@AGENTS.md` 导入） |
-| Cursor | `.cursor/rules/webllm-dev-loop.mdc` |
-| GitHub Copilot | `.github/copilot-instructions.md` |
-| Cline | `.clinerules/webllm-dev-loop.md` |
-| Windsurf | `.windsurf/rules/webllm-dev-loop.md` |
-
-> 接下来做什么、怎么验收？见仓库根 [PLAN.md](PLAN.md)（实施入口，
-> 含 M1 任务清单与新增代码的目录落位规范）。
 
 > 想快速建立全局理解？先读 [docs/架构总览.md](docs/架构总览.md)
 > （分层 / 调用链 / 不变量 / 测试体系 / 债务清单）。
