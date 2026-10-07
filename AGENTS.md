@@ -22,7 +22,8 @@ pages/           页面入口：index(单机训练台) / fed(着陆) / host(房�
 design/          权威设计稿 v3.1（目标态）：01 愿景 / 02 架构总纲 / 03 IR / 04 语言AI面 /
                  05 算子内核 / 06 执行引擎 / 07 学习策略 + 07b 算法目录 / 08 家族压测 /
                  09 联邦协议 / 10 去中心安全 / 11 数据与模型公地 / 12 路线图 / 13 风险开放问题 /
-                 14 训练工程现实回应（先读 design/README.md）
+                 14 训练工程现实回应 / 15 产品形态与协作模型 / 16 协议与规范 / 17 Agent任务模型
+                 （先读 design/README.md；文档与目录规范见其末节）
 src/app/         入口装配：main / fed-main / selftest
 src/gpu/         WebGPU 引擎：device/arena/buffer/pipeline + kernels/{gemm,norm,attention,rope,activation,embedding,misc}/（35 个 WGSL）
 src/model/       模型图：tiny-gpt / qwen（前反向 + 绑定）
