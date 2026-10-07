@@ -176,6 +176,9 @@ SOP、工程不变量、无效手段黑名单）。各 harness 的薄适配（�
 | Cline | `.clinerules/webllm-dev-loop.md` |
 | Windsurf | `.windsurf/rules/webllm-dev-loop.md` |
 
+> 接下来做什么、怎么验收？见仓库根 [PLAN.md](PLAN.md)（实施入口，
+> 含 M1 任务清单与新增代码的目录落位规范）。
+
 > 想快速建立全局理解？先读 [docs/架构总览.md](docs/架构总览.md)
 > （分层 / 调用链 / 不变量 / 测试体系 / 债务清单）。
 
