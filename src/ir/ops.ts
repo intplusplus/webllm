@@ -335,6 +335,16 @@ function defs (): OpDefinition[]
     '因果自注意力（q/k/v 形状 [B*T, H, D]；attention/attention_gqa 共享契约）' ) );
 
   add( builtin( {
+    op: 'CrossEntropy', version: '1.0',
+    props: { reduction: { type: 'enum', values: [ 'mean', 'sum' ], default: 'mean' } },
+    io: { in: [ { name: 'logits' }, { name: 'targets', dtype: 'i32' } ], out: [ { name: 'loss' } ] },
+    caps: [ 'forward', 'vjp' ], phase: [ 'train' ], pure: true,
+    cost: { flops: 'O(M*V)', mem: 'O(M*V)' },
+    writesReads: { reads: [ 'act' ], writes: [ 'act' ] },
+    impl: { kind: 'kernel', entry: 'kernels/misc/ce_softmax_bwd.wgsl' },
+  }, () => ( { loss: tensor( [], 'f32' ) } ), '交叉熵损失（前向出标量，反向出 dlogits；与 ce_softmax_bwd 共用实现）' ) );
+
+  add( builtin( {
     op: 'ZLoss', version: '1.0',
     props: { coef: { type: 'float', default: 1e-4 } },
     io: { in: [ { name: 'logits' } ], out: [ { name: 'loss' } ] },

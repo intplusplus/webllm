@@ -346,6 +346,38 @@ export function builtinCpuImpls (): CpuImplRegistry
     return { out: f32( attentionRef( toF32( q ), toF32( k ), toF32( v ), B, T, H, D, causal ), q.shape.slice() ) };
   } );
 
+  // ---- 损失 ---------------------------------------------------------------
+
+  registry.register( 'CrossEntropy', ( ctx ) =>
+  {
+    const env = makeEnv( ctx );
+    const logits = take( ctx.ins.logits, undefined, 'CrossEntropy.logits' );
+    const targets = take( ctx.ins.targets, undefined, 'CrossEntropy.targets' );
+    const x = toF32( logits );
+    const t = toU32( targets.data );
+    const V = logits.shape[ logits.shape.length - 1 ] ?? 0;
+    if ( V <= 0 ) throw new Error( 'CrossEntropy：logits 形状里没有最后一维' );
+    const M = Math.floor( x.length / V );
+    if ( t.length !== M )
+      throw new Error( `CrossEntropy：targets 长度 ${ t.length } != logits 行数 ${ M }` );
+
+    // 数值稳定的逐行 log-sum-exp；NaN/-Inf 一律视作 0（fp32 训练里不该出现，出现要暴露）。
+    let total = 0;
+    for ( let r = 0; r < M; r++ )
+    {
+      const base = r * V;
+      let m = -Infinity;
+      for ( let v = 0; v < V; v++ ) if ( x[ base + v ] > m ) m = x[ base + v ];
+      let se = 0;
+      for ( let v = 0; v < V; v++ ) se += Math.exp( x[ base + v ] - m );
+      const logZ = m + Math.log( se );
+      total += -( x[ base + t[ r ] ] - logZ );
+    }
+    const sumReduction = propString( ctx.props, 'reduction', env, 'mean' ) === 'sum';
+    const loss = sumReduction ? total : total / Math.max( 1, M );
+    return { loss: f32( new Float32Array( [ loss ] ), [] ) };
+  } );
+
   // ---- ③ 组合原语 ---------------------------------------------------------
 
   // 这些原语在 run 期只做「输出 = 最后一个子节点的输出」的透传：

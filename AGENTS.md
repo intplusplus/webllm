@@ -18,7 +18,7 @@ PC 与手机同一 WiFi 下打开网页即可联邦训练同一个模型（P2P�
 ## 仓库地图
 
 ```
-pages/           页面入口：index(单机训练台) / fed(着陆) / host(房主) / join(节点) / webgpu-check(探测)
+pages/           页面入口：index(单机训练台) / fed(着陆) / host(房主) / join(节点) / ir(模型编写台) / webgpu-check(探测)
 design/          权威设计稿 v3.1（目标态）：01 愿景 / 02 架构总纲 / 03 IR / 04 语言AI面 /
                  05 算子内核 / 06 执行引擎 / 07 学习策略 + 07b 算法目录 / 08 家族压测 /
                  09 联邦协议 / 10 去中心安全 / 11 数据与模型公地 / 12 路线图 / 13 风险开放问题 /
@@ -32,9 +32,10 @@ src/infer/       生成循环 / sampler
 src/weights/     safetensors / GPTQ int4 反量化 / qwen-loader
 src/reference/   CPU 参考实现（GPU 对拍基准）
 src/fed/         公共训练网络：protocol / engine(+gpu-engine) / node(编排) / transport / bus / corpus / capability
-src/ir/          Spec IR（P0/P1/P2 + run 已落地）：types/op/ops/expr/canonical/hash/migrate +
+src/ir/          Spec IR（P0/P1/P2 + run + 反向已落地）：types/op/ops/expr/canonical/hash/migrate +
                  infer(静态类型与诊断) / jsx(双向投影) / plan+emit(编译层，自动 passBreak) +
-                 exec+cpu-impls(run 的 CPU 对拍后端) / tinygpt-ir(GPT 的 IR 构建与张量绑定)
+                 exec+cpu-impls(run 的 CPU 后端) / grad+cpu-grads(反向 VJP 表 + AdamW) /
+                 tinygpt-ir(GPT 的 IR 构建与张量绑定) / train(接损失) / studio(编写台门面)
 src/tests/       页面自检注册表（kernels+model = 44 项）+ {ops,train,infer,qwen,perf}/ 分组 + fed/(无头与端到端) + ir/(Spec IR 验收)
 scripts/         自检与工具：verify-*.mjs / signal-server / start-demo / build-standalone / lib/{cdp,bundle,cert}
 docs/            权威文档（先读 docs/架构总览.md）
@@ -46,8 +47,9 @@ docs/            权威文档（先读 docs/架构总览.md）
 npm run dev / demo / demo:https     # dev server / 一键联邦 demo（信令+dev server）/ 自签 https
 npm run typecheck / build           # 静态检查 / 四页构建
 npm run verify:fed                  # 联邦核心自检（Node 无头，19 项）
-npm run verify:ir                   # Spec IR 自检（Node 无头，39 项：IR-V1~V5/OP-V3·V4/ENG-V2~V4·V12/RUN-V0~V3）
+npm run verify:ir                   # Spec IR 自检（Node 无头，48 项：IR-V1~V5/OP-V3·V4/ENG-V2~V4·V12/RUN-V0~V3/GRAD-V0~V3/STUDIO-V1~V5）
 node scripts/verify-ir.mjs --log <file>   # 同上，并把结果按 UTF-8 落盘（Windows 控制台中文会乱码）
+npm run build:standalone:ir         # 打包单文件离线版 → demo/ir-studio.html（双击即开）
 npm run verify:e2e                  # 三节点端到端（20 项，含抓作弊节点）
 npm run verify:signal               # 信令协议（9 项，含裸 socket 心跳回归）
 npm run verify:ui                   # 真实 Chromium 界面测试（20 项）

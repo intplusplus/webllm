@@ -66,6 +66,29 @@ export {
 } from './binding';
 export { builtinCpuImpls } from './cpu-impls';
 export { buildGptIr, bindBatch, type GptIr } from './tinygpt-ir';
+export {
+  backward,
+  trainStep,
+  createAdamW,
+  createGradRegistry,
+  dParamOf,
+  zerosLike,
+  asF32,
+  addGrad,
+  scalarValue,
+  makeScalar,
+  type GradContext,
+  type VjpFn,
+  type VjpResult,
+  type GradRegistry,
+  type BackwardOptions,
+  type BackwardResult,
+  type AdamWConfig,
+  type Optimizer,
+  type TrainStepResult,
+} from './grad';
+export { attachCrossEntropy, setTargets, LOSS_NODE_ID, TARGETS_TENSOR } from './train';
+export { builtinCpuGrads } from './cpu-grads';
 
 import type { Model } from './types';
 import type { OpRegistry } from './op';

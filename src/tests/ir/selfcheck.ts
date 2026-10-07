@@ -24,6 +24,10 @@ import {
   buildGptIr,
   bindBatch,
 } from '../../ir/index';
+import { attachCrossEntropy, setTargets } from '../../ir/train';
+import { builtinCpuGrads } from '../../ir/cpu-grads';
+import { backward, createAdamW, dParamOf } from '../../ir/grad';
+import { openTemplate, analyze, reweight, annotateEnv, applyFix } from '../../ir/studio';
 import { DEFAULT_CONFIG } from '../../model/config';
 import { initWeights } from '../../model/init';
 import { gptForwardRef } from '../../reference/gpt-ref';
@@ -648,6 +652,154 @@ export async function runIrSelfCheck (): Promise<IrTestResult[]>
     catch { rejected = true; }
     push( 'INV-12 · defineOp 拒绝未审阅贡献（无 reviewId / 无对拍）', rejected,
       rejected ? '已按 INV-12 拒绝' : '竟然放行了' );
+  }
+
+  // ===================== P5：反向传播落到 IR =====================
+
+  {
+    // 单层小模型：暴露 VJP 错误最快，跑得也快。
+    const cfg = { vocabSize: 32, blockSize: 8, nLayer: 1, nHead: 2, nEmbd: 16, bias: true };
+    const w = initWeights( cfg, 99 );
+    const gpt = buildGptIr( cfg, w );
+    const model = attachCrossEntropy( gpt.model );
+    const B = 2;
+    const T = 4;
+    const rnd = mulberry32( 11 );
+    const tokens = new Uint32Array( B * T );
+    const targets = new Uint32Array( B * T );
+    for ( let i = 0; i < tokens.length; i++ )
+    {
+      tokens[ i ] = Math.floor( rnd() * cfg.vocabSize );
+      targets[ i ] = Math.floor( rnd() * cfg.vocabSize );
+    }
+    bindBatch( gpt, tokens, B, T );
+    setTargets( gpt.tensors, targets, B, T );
+
+    const sym = { B, T };
+    const ir = infer( model, { symbols: sym } );
+    const errs = ir.diags.filter( ( d ) => d.level === 'error' );
+    const artifact = emit( model, ir, plan( model, ir, { backends: [ cpuBackend() ] } ) );
+    const impls = builtinCpuImpls();
+    const grads = builtinCpuGrads();
+    const binding = { tensors: gpt.tensors, symbols: sym };
+
+    push( 'GRAD-V0 · 带损失节点的图 infer 零 error', errs.length === 0,
+      errs.length === 0 ? `根=loss，节点 ${ Object.keys( model.nodes ).length } 个` : errs.map( ( d ) => d.code ).join( ',' ) );
+
+    const lossNow = (): number => Number( run( model, ir, artifact, binding, impls ).rootOutput.data[ 0 ] );
+    const bwd = backward( model, ir, artifact, binding, impls, grads );
+
+    // ---- GRAD-V1：解析梯度 vs 中心差分 ----
+    // 每个张量取**解析梯度绝对值最大**的分量做差分：那里 FD 信号最强、最有可分辨性。
+    // （随机小模型的很多权重梯度只有 1e-6 量级，低于 fp32 loss 的 ulp，差分必然读出 0，
+    //   拿那些点判对错是在测浮点分辨率而不是测导数。）
+    const names = [
+      'wte', 'layers.0.ln1W', 'layers.0.ln1B', 'layers.0.wq.w',
+      'layers.0.wq.b', 'layers.0.fc.w', 'layers.0.attnProj.w', 'lnFW', 'lmHead.b',
+    ];
+    const eps = 1e-3;
+    const rtol = 5e-2;
+    let strong = 0;
+    let weakBad = 0;
+    let worstRel = 0;
+    let worstAt = '(未测到)';
+    let tested = 0;
+    for ( const name of names )
+    {
+      const tensor = gpt.tensors.get( name );
+      const ana = dParamOf( bwd.dParams, gpt.tensors, name );
+      if ( !tensor || !( tensor.data instanceof Float32Array ) || !ana ) continue;
+      const p = tensor.data;
+      if ( p.length !== ana.length || p.length === 0 ) continue;
+
+      let idx = 0;
+      for ( let i = 1; i < ana.length; i++ ) if ( Math.abs( ana[ i ] ) > Math.abs( ana[ idx ] ) ) idx = i;
+
+      const orig = p[ idx ];
+      p[ idx ] = orig + eps; const lp = lossNow();
+      p[ idx ] = orig - eps; const lm = lossNow();
+      p[ idx ] = orig;
+      const numeric = ( lp - lm ) / ( 2 * eps );
+      const analytic = ana[ idx ];
+      const scale = Math.max( Math.abs( numeric ), Math.abs( analytic ) );
+      const diff = Math.abs( numeric - analytic );
+      if ( scale >= 1e-3 )
+      {
+        // 强分量：中心差分的分辨率足够，比相对误差。
+        strong += 1;
+        const rel = diff / Math.max( 1e-12, scale );
+        if ( rel > worstRel ) { worstRel = rel; worstAt = `${ name }[${ idx }] 数值=${ numeric.toExponential( 2 ) } 解析=${ analytic.toExponential( 2 ) }`; }
+      }
+      else if ( diff > 1e-3 )
+      {
+        // 弱分量：解析梯度≈0 时数值差分也必须≈0。
+        // 这一条专抓"漏了一条梯度路径"——如果某条路径没回传，解析会装成 0，而数值会明显非 0。
+        weakBad += 1;
+        if ( worstAt === '(未测到)' ) worstAt = `${ name }[${ idx }] 数值=${ numeric.toExponential( 2 ) } 解析=0（疑似漏路径）`;
+      }
+      tested += 1;
+    }
+    push( `GRAD-V1 · 解析梯度 vs 中心差分（${ tested } 个张量，各取最大分量）`,
+      tested >= 6 && strong >= 3 && weakBad === 0 && worstRel < rtol,
+      `非平凡样本 ${ strong } 个；噪声地板违例 ${ weakBad } 个；最差相对误差 ${ worstRel.toExponential( 2 ) } @ ${ worstAt }` );
+
+    // ---- GRAD-V2：tie 参数按张量身份归并 ----
+    const keys = Object.keys( bwd.dParams );
+    const both = keys.includes( 'wte' ) && keys.includes( 'lmHead.w' );
+    push( 'GRAD-V2 · tie 参数按张量身份归并（不出现两个别名）', !both,
+      `dParams ${ keys.length } 个键；wte=${ keys.includes( 'wte' ) } lmHead.w=${ keys.includes( 'lmHead.w' ) }` );
+
+    // ---- GRAD-V3：用 IR 反向真的把 loss 训下去 ----
+    const opt = createAdamW( { lr: 0.05, clip: 1 } );
+    const first = bwd.loss;
+    let last = first;
+    const N = 40;
+    const t0 = Date.now();
+    for ( let s = 0; s < N; s++ )
+    {
+      const r = backward( model, ir, artifact, binding, impls, grads );
+      opt.step( r.dParams, gpt.tensors );
+      last = r.loss;
+    }
+    const ms = Date.now() - t0;
+    push( `GRAD-V3 · IR 反向训练 ${ N } 步 loss 下降`, last < first,
+      `${ first.toFixed( 4 ) } → ${ last.toFixed( 4 ) }（Δ=${ ( first - last ).toFixed( 4 ) }，${ ( ms / N ).toFixed( 1 ) } ms/步）` );
+  }
+
+  // ===================== 编写台（页面上做的实验，这里做同样的断言） =====================
+
+  {
+    const cpu = cpuBackend();
+    const s = openTemplate( 'gpt-small' );
+    const a1 = analyze( s, cpu );
+    const ok1 = a1.specHash.length === 64 && /^[0-9a-f]+$/.test( a1.specHash )
+      && a1.nodeCount === 47 && a1.estimate.params > 0;
+    push( 'STUDIO-V1 · gpt-small 模板可分析（指纹/节点/参数量）', ok1,
+      `hash=${ a1.specHash.slice( 0, 10 ) } 节点=${ a1.nodeCount } 参数=${ a1.estimate.params } 张量=${ a1.estimate.tensors }` );
+
+    const a2 = analyze( reweight( s, 999 ), cpu );
+    push( 'STUDIO-V2 · 换一套权重后 specHash 不变（架构与权重分离）', a1.specHash === a2.specHash,
+      `${ a1.specHash.slice( 0, 10 ) } → ${ a2.specHash.slice( 0, 10 ) }` );
+
+    annotateEnv( s, 'cpu', 4, 'fp16' );
+    const a3 = analyze( s, cpu );
+    push( 'STUDIO-V3 · 打 device/shard/precision 注解后 specHash 不变（INV-11）', a1.specHash === a3.specHash,
+      `${ a1.specHash.slice( 0, 10 ) } → ${ a3.specHash.slice( 0, 10 ) }` );
+
+    // 「应用修复」按钮真的改 IR：点完那条诊断必须消失。
+    const bp = openTemplate( 'broken-param' );
+    const ab = analyze( bp, cpu );
+    const d1 = ab.diags.find( ( x ) => x.code === 'MISSING_PARAM' && x.fix !== undefined );
+    const out1 = d1 ? applyFix( bp, d1 ) : { applied: false, note: '没找到可修复的诊断' };
+    const gone1 = !analyze( bp, cpu ).diags.some( ( x ) => x.code === 'MISSING_PARAM' );
+    push( 'STUDIO-V4 · 「应用修复」让 MISSING_PARAM 真的消失', out1.applied && gone1, out1.note );
+
+    const bs = openTemplate( 'broken-strategy' );
+    const as0 = analyze( bs, cpu );
+    const d2 = as0.diags.find( ( x ) => x.code === 'STRATEGY_INCOMPAT' && x.fix !== undefined );
+    const out2 = d2 ? applyFix( bs, d2 ) : { applied: false, note: '没找到可修复的诊断' };
+    const gone2 = !analyze( bs, cpu ).diags.some( ( x ) => x.code === 'STRATEGY_INCOMPAT' );
+    push( 'STUDIO-V5 · 「应用修复」让 STRATEGY_INCOMPAT 真的消失', out2.applied && gone2, out2.note );
   }
 
   // ===================== 哈希算法自检（跨端一致性前提） =====================

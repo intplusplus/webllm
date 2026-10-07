@@ -39,7 +39,18 @@ export interface CpuRunContext
   childOutputs: TensorValue[];
   /** 符号维绑定（如 `{ B: 2, T: 16 }`）。RoPE 这类需要 T 的算子读它。 */
   symbols: Record<string, number>;
+  /**
+   * 端口 → 来源。**exec 解析一次并记录下来，反向传播直接复用**——
+   * 这样"正向怎么连的"与"反向梯度往哪流"在结构上不可能分歧。
+   */
+  sources: Record<string, PortSource>;
 }
+
+/** 一个输入端口的来源：某个节点的某个输出端口 / 一个绑定参数 / 无。 */
+export type PortSource =
+  | { nodeId: NodeId; outPort: string }
+  | { param: string }
+  | null;
 
 export type CpuOpImpl = ( ctx: CpuRunContext ) => Record<string, TensorValue>;
 
@@ -78,6 +89,8 @@ export interface RunTrace
 {
   order: NodeId[];
   nodes: Record<NodeId, Record<string, TensorValue>>;
+  /** 每个节点的完整正向上下文（反向传播直接复用，避免重新解析端口）。 */
+  contexts: Record<NodeId, CpuRunContext>;
   passCount: number;
   passBreaks: number;
 }
@@ -160,6 +173,7 @@ export function run (
 
   // nodeId → 端口 → 值
   const values: Record<NodeId, Record<string, TensorValue>> = {};
+  const contexts: Record<NodeId, CpuRunContext> = {};
 
   for ( const id of order )
   {
@@ -177,28 +191,46 @@ export function run (
     for ( const key of Object.keys( bind ) )
       params[ key ] = requireTensor( binding.tensors, bind[ key ], `${ id }.bind.${ key }` );
 
-    // ---- 端口解析（与 infer 同优先级） ----
+    // ---- 端口解析（与 infer 同优先级），同时记录来源供反向复用 ----
     const ins: Record<string, TensorValue | null> = {};
+    const sources: Record<string, PortSource> = {};
     const ports = inPortNames( contract );
     const children = node.children ?? [];
     for ( let k = 0; k < ports.length; k++ )
     {
       const port = ports[ k ];
       let v: TensorValue | null = null;
+      let src: PortSource = null;
 
       if ( node.slot && Object.prototype.hasOwnProperty.call( node.slot, port ) )
       {
-        v = firstOutput( values[ node.slot[ port ] ] );
+        const sid = node.slot[ port ];
+        v = firstOutput( values[ sid ] );
+        src = { nodeId: sid, outPort: firstOutPortName( registry, model, sid ) };
       }
       else
       {
         const edge = ( incoming[ id ] ?? [] ).find( ( e ) => e.toPort === port );
-        if ( edge ) v = values[ edge.from ]?.[ edge.fromPort ] ?? firstOutput( values[ edge.from ] );
-        else if ( k < children.length ) v = firstOutput( values[ children[ k ] ] );
+        if ( edge )
+        {
+          v = values[ edge.from ]?.[ edge.fromPort ] ?? firstOutput( values[ edge.from ] );
+          src = { nodeId: edge.from, outPort: edge.fromPort };
+        }
+        else if ( k < children.length )
+        {
+          const cid = children[ k ];
+          v = firstOutput( values[ cid ] );
+          src = { nodeId: cid, outPort: firstOutPortName( registry, model, cid ) };
+        }
       }
 
-      if ( v === null && bind[ port ] !== undefined ) v = params[ port ] ?? null;
+      if ( v === null && bind[ port ] !== undefined )
+      {
+        v = params[ port ] ?? null;
+        src = { param: bind[ port ] };
+      }
       ins[ port ] = v;
+      sources[ port ] = v === null ? null : src;
     }
 
     // ---- 子节点输出（组合原语用） ----
@@ -209,7 +241,8 @@ export function run (
       if ( o ) childOutputs.push( o );
     }
 
-    const outs = impl( { nodeId: id, op, props: node.props, ins, params, childOutputs, symbols } );
+    const ctx: CpuRunContext = { nodeId: id, op, props: node.props, ins, params, childOutputs, symbols, sources };
+    const outs = impl( ctx );
     if ( !outs || typeof outs !== 'object' )
       throw new Error( `run: ${ node.op } 的实现没有返回输出对象` );
 
@@ -222,6 +255,7 @@ export function run (
     }
 
     values[ id ] = outs;
+    contexts[ id ] = ctx;
   }
 
   const rootId = ir.graph.root ?? order[ 0 ];
@@ -232,6 +266,7 @@ export function run (
     trace: {
       order: [ ...order ],
       nodes: values,
+      contexts,
       passCount: artifact.passes.length,
       passBreaks: artifact.passBreaks,
     },
@@ -251,4 +286,13 @@ function firstOutput ( v: Record<string, TensorValue> | undefined ): TensorValue
   if ( !v ) return null;
   for ( const k of Object.keys( v ) ) return v[ k ];
   return null;
+}
+
+/** 某节点第一个输出端口名（slot/children 位置映射时反向路由需要的 outPort）。 */
+function firstOutPortName ( registry: OpRegistry, model: Model, nodeId: NodeId ): string
+{
+  const n = model.nodes[ nodeId ];
+  if ( !n ) return 'out';
+  const names = outPortNames( registry.get( n.op )?.contract );
+  return names[ 0 ] ?? 'out';
 }

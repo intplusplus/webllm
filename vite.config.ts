@@ -16,6 +16,7 @@ export default defineConfig({
         fed: 'pages/fed.html',
         host: 'pages/host.html',
         join: 'pages/join.html',
+        ir: 'pages/ir.html',
       },
     },
   },
