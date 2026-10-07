@@ -35,7 +35,8 @@ src/fed/         公共训练网络：protocol / engine(+gpu-engine) / node(编�
 src/tests/       页面自检注册表（kernels+model = 44 项）+ {ops,train,infer,qwen,perf}/ 分组 + fed/(无头与端到端)
 scripts/         自检与工具：verify-*.mjs / signal-server / start-demo / build-standalone / lib/{cdp,bundle,cert}
 docs/            权威文档（先读 docs/架构总览.md）
-prototype/       交互原型（非构建产物，纯静态 HTML）：solo.html = 单机流程（架构/权重分离、定义模型、数据、训练）；
+prototype/       交互原型（非构建产物，纯静态 HTML）：studio.html = 模型编写台（JSX/IR/AI 三重编写面 +
+                 实时 infer 诊断 + fix）；solo.html = 单机流程（架构/权重分离、数据、训练、模型卡）；
                  app.html = 协作流程（房间、角色、分支、设计↔代码对照）
 ```
 
