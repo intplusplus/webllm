@@ -11,7 +11,8 @@ webllm：浏览器内自研 LLM 引擎（WebGPU + WGSL，TypeScript + Vite），
 tiny-GPT 训练闭环与 Qwen2.5-0.5B int4 推理；第二条线是**公共训练网络**：
 PC 与手机同一 WiFi 下打开网页即可联邦训练同一个模型（P2P、数据不出本地）。
 
-> 目录职责：`design/` 是**权威设计稿**（v3.1 目标态，先读 `design/README.md`）；
+> 目录职责：`PLAN.md` 是**实施入口**（接下来做什么、怎么验收）；
+> `design/` 是**权威设计稿**（v3.1 目标态，先读 `design/README.md`）；
 > `docs/` 存**现状与记录**（架构总览/实测/bug/联调/设计评审记录）。
 > 二者冲突时 design 定义目标，docs 描述现状。
 
@@ -35,9 +36,6 @@ src/fed/         公共训练网络：protocol / engine(+gpu-engine) / node(编�
 src/tests/       页面自检注册表（kernels+model = 44 项）+ {ops,train,infer,qwen,perf}/ 分组 + fed/(无头与端到端)
 scripts/         自检与工具：verify-*.mjs / signal-server / start-demo / build-standalone / lib/{cdp,bundle,cert}
 docs/            权威文档（先读 docs/架构总览.md）
-prototype/       交互原型（非构建产物，纯静态 HTML）：studio.html = 模型编写台（JSX/IR/AI 三重编写面 +
-                 实时 infer 诊断 + fix）；solo.html = 单机流程（架构/权重分离、数据、训练、模型卡）；
-                 app.html = 协作流程（房间、角色、分支、设计↔代码对照）
 ```
 
 ## 常用命令
