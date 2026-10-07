@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>织造 · 完整工作流 demo</title>
+<style>
+:root{
+  --bg:#121211;--panel:#1a1a18;--panel2:#222220;--panel3:#2a2a27;
+  --line:#33332e;--line2:#43433c;
+  --txt:#ececea;--mut:#9f9f98;--dim:#6d6d66;
+  --p:#afa9ec;--pbg:#2a2750;--pb:#7f77dd;
+  --t:#5dcaa5;--tbg:#0f3329;--tb:#1e6b53;
+  --b:#85b7eb;--bbg:#10304c;--bb:#245b8a;
+  --a:#ef9f27;--abg:#3a2a0c;--ab:#7a5514;
+  --r:#e24b4a;--rbg:#3a1616;--rb:#7a2b2b;
+  --g:#97c459;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--txt);font-size:13px;line-height:1.6;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.app{display:grid;grid-template-columns:212px 1fr;height:100vh;overflow:hidden}
+
+/* rail */
+.rail{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:auto;padding:14px 11px}
+.brand{display:flex;align-items:center;gap:8px;padding:2px 7px 12px}
+.brand .mark{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,#7f77dd,#5dcaa5);flex:0 0 auto}
+.brand b{font-size:13.5px;font-weight:500}
+.brand span{display:block;font-size:10.5px;color:var(--dim);margin-top:-2px}
+.grp{font-size:10px;color:var(--dim);letter-spacing:.8px;padding:12px 8px 5px}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav button{all:unset;cursor:pointer;padding:6px 9px;border-radius:8px;color:var(--mut);display:flex;align-items:center;gap:8px;font-size:12.5px}
+.nav button:hover{background:var(--panel2);color:var(--txt)}
+.nav button.on{background:var(--pbg);color:#e6e3ff}
+.nav .n{width:15px;height:15px;border-radius:50%;background:var(--panel3);color:var(--dim);font-size:9px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.nav button.on .n{background:var(--pb);color:#14140f}
+.rail .foot{margin-top:auto;padding:10px 8px 0;border-top:1px solid var(--line)}
+.rail .foot .l1{font-size:10px;color:var(--dim)}
+.rail .foot .l2{font-size:11.5px;color:var(--mut);margin-top:2px}
+
+/* main */
+.main{display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.topbar{display:flex;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--panel);flex:0 0 auto}
+.topbar h1{font-size:14.5px;font-weight:500;margin:0}
+.topbar .sub{font-size:10.5px;color:var(--dim)}
+.spacer{flex:1}
+.chip{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mut);white-space:nowrap}
+.chip.l0{background:var(--pbg);border-color:#4a4582;color:#cfcaff}
+.chip.l1{background:var(--tbg);border-color:var(--tb);color:#a7efd4}
+.chip.l2{background:var(--abg);border-color:var(--ab);color:#f6cf8c}
+.chip.l3{background:var(--rbg);border-color:var(--rb);color:#f3aeae}
+.chip.g{background:var(--tbg);border-color:var(--tb);color:#a7efd4}
+.chip.r{background:var(--rbg);border-color:var(--rb);color:#f3aeae}
+button.btn{all:unset;cursor:pointer;font-size:12px;padding:6px 12px;border-radius:8px;background:var(--pbg);color:#ded9ff;border:1px solid #4a4582;white-space:nowrap}
+button.btn:hover{background:#34306a}
+button.btn.ghost{background:transparent;color:var(--mut);border-color:var(--line2)}
+button.btn.ghost:hover{color:var(--txt);background:var(--panel2)}
+button.btn.sm{font-size:11px;padding:4px 9px}
+button.btn:disabled{opacity:.4;cursor:not-allowed}
+.scroll{overflow:auto;padding:18px;flex:1 1 auto}
+.view{display:none}.view.on{display:block}
+h2.sec{font-size:11.5px;font-weight:500;color:var(--dim);letter-spacing:.6px;margin:0 0 10px}
+h2.sec:not(:first-child){margin-top:22px}
+.note{font-size:11px;color:var(--dim);margin-top:8px}
+.row{display:grid;gap:12px}
+.row.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.row.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.row.c4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px}
+.card.pad0{padding:0;overflow:hidden}
+.card .big{font-size:21px;font-weight:500;letter-spacing:.4px}
+.card .cap{font-size:10.5px;color:var(--dim)}
+.kv{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0;color:var(--mut)}
+.kv b{color:var(--txt);font-weight:400;text-align:right}
+.tag{font-size:10.5px;padding:2px 7px;border-radius:6px;background:var(--panel2);color:var(--mut);border:1px solid var(--line);white-space:nowrap}
+.tag.p{background:var(--pbg);color:#cfcaff;border-color:#4a4582}
+.tag.t{background:var(--tbg);color:#a7efd4;border-color:var(--tb)}
+.tag.b{background:var(--bbg);color:#bfdcf7;border-color:var(--bb)}
+.tag.a{background:var(--abg);color:#f6cf8c;border-color:var(--ab)}
+.tag.r{background:var(--rbg);color:#f3aeae;border-color:var(--rb)}
+.anchor{margin-top:22px;font-size:10.5px;color:var(--dim);border-top:1px dashed var(--line2);padding-top:9px}
+.anchor b{color:var(--p);font-weight:400}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+table{width:100%;border-collapse:collapse;font-size:11.5px}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--dim);font-weight:400;font-size:10.5px}
+td.num,th.num{text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace}
+tr:last-child td{border-bottom:0}
+.led{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:1px}
+.led.on{background:var(--t)}.led.idle{background:var(--dim)}.led.warn{background:var(--a)}.led.off{background:var(--r)}
+
+/* pick cards */
+.picks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.pick{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;transition:border-color .15s}
+.pick:hover{border-color:var(--pb)}
+.pick .t{font-size:14px;font-weight:500;margin-bottom:5px}
+.pick .s{font-size:11.5px;color:var(--mut);min-height:38px}
+.pick .go{font-size:11.5px;color:var(--p);margin-top:8px}
+
+/* phase */
+.phases{display:flex;flex-wrap:wrap;gap:6px;row-gap:10px}
+.ph{display:flex;align-items:center;gap:6px;padding:5px 9px;border-radius:8px;border:1px solid var(--line);background:var(--panel2)}
+.ph .n{width:15px;height:15px;border-radius:50%;background:var(--panel3);color:var(--dim);font-size:9px;display:flex;align-items:center;justify-content:center}
+.ph .lb{font-size:11px;color:var(--mut)}
+.ph.done{border-color:var(--tb)}.ph.done .n{background:var(--tbg);color:#a7efd4}
+.ph.now{border-color:var(--pb);background:var(--pbg)}.ph.now .lb{color:#dedeff}.ph.now .n{background:var(--pb);color:#14140f}
+
+/* wizard */
+.wz{display:grid;grid-template-columns:1fr 330px;gap:14px;align-items:start}
+.wsteps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.wstep{font-size:11px;padding:4px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--dim)}
+.wstep.on{border-color:var(--pb);background:var(--pbg);color:#dedeff}
+.wstep.done{border-color:var(--tb);color:#a7efd4}
+.frm{display:flex;flex-direction:column;gap:12px}
+.f{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.f .lb{font-size:12px;font-weight:500;margin-bottom:2px}
+.f .hint{font-size:10.5px;color:var(--dim);margin-bottom:8px}
+.f select,.f input[type=text],.f input[type=number]{width:100%;background:var(--panel2);color:var(--txt);border:1px solid var(--line2);border-radius:7px;padding:5px 7px;font-size:11.5px}
+.f input[type=range]{width:100%}
+.f .seg2{display:flex;gap:6px;flex-wrap:wrap}
+.f .seg2 button{all:unset;cursor:pointer;font-size:11px;padding:5px 10px;border-radius:7px;border:1px solid var(--line2);color:var(--mut)}
+.f .seg2 button.on{border-color:var(--pb);background:var(--pbg);color:#dedeff}
+.side{position:sticky;top:0;display:flex;flex-direction:column;gap:12px}
+.fp{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;color:var(--p);letter-spacing:.5px;word-break:break-all}
+pre.mani{background:#0e0e0d;border:1px solid var(--line);border-radius:10px;padding:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.6;color:#bfe3d1;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.warnbox{background:var(--abg);border:1px solid var(--ab);border-radius:9px;padding:9px 11px;font-size:11px;color:#f6cf8c}
+.okbox{background:var(--tbg);border:1px solid var(--tb);border-radius:9px;padding:9px 11px;font-size:11px;color:#a7efd4}
+.badbox{background:var(--rbg);border:1px solid var(--rb);border-radius:9px;padding:9px 11px;font-size:11px;color:#f3aeae}
+
+/* log */
+.log{background:#0d0d0c;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.75;color:#a8c9b8;max-height:280px;overflow:auto;white-space:pre-wrap}
+.log .e{color:#f0997b}.log .w{color:#ef9f27}.log .k{color:#85b7eb}.log .g{color:#5dcaa5}
+
+/* tree */
+.gwrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;overflow:auto}
+svg.tree{width:100%;height:auto;display:block;min-width:780px}
+.tn{cursor:pointer}.tn rect{transition:stroke .12s}.tn:hover rect{stroke:var(--p)}
+.tn.sel rect{stroke:#e0dcff;stroke-width:1.6}
+.tn text{font-size:11px;fill:var(--txt)}.tn .sub{font-size:9.5px;fill:var(--dim)}
+.te{stroke:var(--line2);stroke-width:1;fill:none}
+.te.fork{stroke-dasharray:5 4}.te.p{stroke:#7f77dd;stroke-width:1.6}
+.tel{font-size:9.5px;fill:var(--dim)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:8px}
+.legend i{display:inline-block;width:18px;border-top:1px solid var(--line2);vertical-align:4px;margin-right:5px}
+.legend i.d{border-top-style:dashed}.legend i.p{border-top:1.6px solid var(--pb)}
+
+/* gap table */
+.gap{font-size:11.5px}
+.gap td{white-space:normal;vertical-align:top}
+.st{font-size:10px;padding:1px 7px;border-radius:5px;white-space:nowrap}
+.st.ok{background:var(--tbg);color:#a7efd4}
+.st.part{background:var(--abg);color:#f6cf8c}
+.st.no{background:var(--rbg);color:#f3aeae}
+
+.novonly{display:block}.proonly{display:none}
+body.pro .novonly{display:none}body.pro .proonly{display:block}
+
+/* phone frame for join view */
+.phone{width:310px;margin:0 auto;border:1px solid var(--line2);border-radius:26px;padding:14px;background:var(--panel)}
+.phone .notch{width:70px;height:5px;border-radius:3px;background:var(--panel3);margin:0 auto 12px}
+.phone .scr{background:var(--bg);border-radius:16px;padding:14px;min-height:420px;display:flex;flex-direction:column;gap:10px}
+.bigbtn{display:block;width:100%;text-align:center;padding:12px;border-radius:12px;background:var(--pbg);border:1px solid #4a4582;color:#dedeff;font-size:14px;cursor:pointer}
+.bigbtn.q{background:transparent;border-color:var(--line2);color:var(--mut);font-size:12.5px;padding:10px}
+
+.toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,160%);background:var(--panel3);border:1px solid var(--line2);border-radius:10px;padding:10px 16px;font-size:12px;z-index:60;transition:transform .24s ease;max-width:76vw}
+.toast.on{transform:translate(-50%,0)}
+.toast b{color:var(--p)}
+</style>
+</head>
+<body class="novice">
+<div class="app">
+
+<aside class="rail">
+  <div class="brand"><div class="mark"></div><div><b>织造</b><span>完整工作流 demo</span></div></div>
+
+  <div class="grp">准备</div>
+  <nav class="nav" id="nav1">
+    <button data-v="start" class="on"><span class="n">1</span>入口</button>
+    <button data-v="probe"><span class="n">2</span>能力探测</button>
+    <button data-v="base"><span class="n">3</span>选起点</button>
+  </nav>
+
+  <div class="grp">建房间</div>
+  <nav class="nav" id="nav2">
+    <button data-v="create"><span class="n">4</span>创建向导</button>
+  </nav>
+
+  <div class="grp">协作</div>
+  <nav class="nav" id="nav3">
+    <button data-v="room"><span class="n">5</span>房间总览</button>
+    <button data-v="join"><span class="n">6</span>别人加入</button>
+    <button data-v="train"><span class="n">7</span>训练进行中</button>
+  </nav>
+
+  <div class="grp">收尾</div>
+  <nav class="nav" id="nav4">
+    <button data-v="verify"><span class="n">8</span>验收</button>
+    <button data-v="publish"><span class="n">9</span>发布</button>
+    <button data-v="audit"><span class="n">10</span>血缘与账本</button>
+  </nav>
+
+  <div class="grp">核对</div>
+  <nav class="nav" id="nav5">
+    <button data-v="gap"><span class="n">11</span>设计↔代码</button>
+  </nav>
+
+  <div class="foot">
+    <div class="l1">身份</div>
+    <div class="l2" id="whoami">@我 · 房主</div>
+    <div class="l1" style="margin-top:6px">模式</div>
+    <div class="l2" id="modeName">小白 · 照房主设置</div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div><h1 id="ttl">入口</h1><div class="sub" id="sub">选择你要做什么</div></div>
+    <div class="spacer"></div>
+    <span id="ctx" class="chip">没有房间</span>
+    <div class="seg2" style="display:flex;gap:0;border:1px solid var(--line2);border-radius:9px;overflow:hidden">
+      <button class="btn ghost sm" id="mNov" style="border:0;border-radius:0">小白</button>
+      <button class="btn ghost sm" id="mPro" style="border:0;border-radius:0">专业</button>
+    </div>
+  </div>
+  <div class="scroll" id="scroll"></div>
+</main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   0. 基础工具：与仓库 src/fed/protocol.ts 同构
+   ============================================================ */
+function fnv1a(str){
+  let h=0x811c9dc5>>>0;
+  for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,0x01000193)>>>0; }
+  return h>>>0;
+}
+function fnv1aHex(s){ return fnv1a(s).toString(16).padStart(8,'0'); }
+function sortKeys(o){
+  if(Array.isArray(o)) return o.map(sortKeys);
+  if(o&&typeof o==='object'){ const r={}; Object.keys(o).sort().forEach(k=>r[k]=sortKeys(o[k])); return r; }
+  return o;
+}
+function fingerprintOf(o){ return fnv1aHex(JSON.stringify(sortKeys(o))); }
+const MAGIC='0x574c4644';                 // 'WLFD'
+const HEADER_OVERHEAD=216;                // 13,521 参数 -> 54,300 字节 ⟹ 载荷 54,084 + 头 216
+
+/* ============================================================
+   1. 全局状态（对应 RoomManifest）
+   ============================================================ */
+const S={
+  cap:null,
+  base:'zh-lora-v2@0.71',
+  mode:'novice',
+  created:false,
+  round:1,
+  // 向导配置 —— 字段名与 RoomManifest / ModelSpec 对齐
+  cfg:{
+    roomId:'room-42', taskName:'闽南语医疗方言', taskBrief:'把公共 check 微调到医疗问句上',
+    visibility:'L2',
+    engine:'mlp', preset:'small',
+    vocabSize:65, ctx:64, embDim:48, hidden:128, seed:20261006,
+    blockSize:64, nLayer:4, nHead:4, nEmbd:128, bias:false, maxBatch:8,
+    shards:3, shardMode:'interleave',
+    corpusName:'Tiny Shakespeare（任务提供）', corpusChars:1115394,
+    probeSize:1024, probeEvalCount:256, verifyTol:1e-3, crossCheck:false,
+    rounds:20, localSteps:10, batchSize:8, lr:0.0003,
+    aggMode:'fedavg', outerLr:1, momentum:0.9,
+    policy:'auto'
+  }
+};
+
+/* 参数量：小档取仓库真实值 13,521（demo MLP） */
+const PARAMS={ small:{mlp:13521,gpu:108000}, medium:{mlp:131072,gpu:430000}, large:{mlp:1245184,gpu:1720000} };
+function params(){
+  const m=S.cfg.engine==='mlp'?'mlp':'gpu';
+  return PARAMS[S.cfg.preset][m];
+}
+function frameBytes(p){ return p*4+HEADER_OVERHEAD; }         // 全量 fp32 权重帧
+function loraBytes(p){ return Math.round(p*0.035*4); }         // LoRA 增量 ≈ 3.5% 参数
+function sparseBytes(p){ return Math.round(p*0.03*0.25)+64; }   // top-3% + 2bit
+function secs(bytes,mbps){ return bytes*8/(mbps*1e6); }
+
+/* ============================================================
+   2. 能力探测（真实运行，对应 src/fed/capability.ts）
+   ============================================================ */
+function detectKind(){
+  const ua=navigator.userAgent;
+  if(/Android/i.test(ua)) return 'Android';
+  if(/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
+  if(/Mac OS X/i.test(ua)) return 'macOS';
+  if(/Windows/i.test(ua)) return 'Windows';
+  if(/Linux/i.test(ua)) return 'Linux';
+  return '未知设备';
+}
+async function probe(){
+  const c={
+    kind:detectKind(),
+    cores:(navigator.hardwareConcurrency||0),
+    memGB:(navigator.deviceMemory||0),
+    secure:!!window.isSecureContext,
+    hasGpuApi:!!navigator.gpu,
+    adapterOk:false,vendor:'',arch:'',device:'',f16:false,maxBuf:0,
+    note:''
+  };
+  if(c.hasGpuApi){
+    try{
+      const ad=await navigator.gpu.requestAdapter();
+      if(ad){
+        c.adapterOk=true;
+        const info=ad.info||{};
+        c.vendor=info.vendor||''; c.arch=info.architecture||''; c.device=info.device||'';
+        c.f16=ad.features.has('shader-f16');
+        c.maxBuf=(ad.limits&&ad.limits.maxBufferSize)||0;
+      }
+    }catch(e){ c.note=String(e&&e.message||e); }
+  }
+  // 与 capability.ts 的 advise 同构：三档建议
+  if(!c.secure&&!c.hasGpuApi) c.advise='非安全上下文且无 WebGPU API：用 https 起服务（npm run demo --https），或 chrome://flags 打开 WebGPU。';
+  else if(c.hasGpuApi&&!c.adapterOk) c.advise='有 WebGPU API 但拿不到适配器：常见于驱动过旧 / 远程桌面 / 虚拟 GPU。';
+  else if(c.adapterOk&&!c.f16) c.advise='能拿到适配器但无 shader-f16：只能跑 fp32，会明显更慢。';
+  else if(c.adapterOk&&c.f16) c.advise='WebGPU 就绪且支持 f16：可以当反传训练节点。';
+  else c.advise='没有 WebGPU：仍可作为「评估节点」或「观察者（游客）」参与——这不是被排除，是换角色。';
+  // 可担任角色（降级阶梯的真实落点）
+  c.roles=[];
+  if(c.adapterOk&&c.f16) c.roles.push(['训练节点','反传 / LoRA','t']);
+  else if(c.adapterOk) c.roles.push(['训练节点','反传（fp32，较慢）','a']);
+  c.roles.push(['评估节点','只做前向与探针评估','t']);
+  c.roles.push(['观察者（游客）','只看曲线/账本/血缘','b']);
+  if(c.secure) c.roles.push(['存储节点','为公地资产 pin','b']);
+  return c;
+}
+
+/* ============================================================
+   3. manifest 构造（字段与 src/fed/protocol.ts 的 RoomManifest 对齐）
+   ============================================================ */
+function manifest(){
+  const c=S.cfg;
+  const model = c.engine==='mlp'
+    ? { engine:'mlp', preset:c.preset, vocabSize:c.vocabSize, ctx:c.ctx, embDim:c.embDim, hidden:c.hidden, seed:c.seed }
+    : { engine:'gpu-tinygpt', preset:c.preset, vocabSize:c.vocabSize, blockSize:c.blockSize, nLayer:c.nLayer, nHead:c.nHead, nEmbd:c.nEmbd, bias:c.bias, maxBatch:c.maxBatch, seed:c.seed };
+  const base={
+    roomId:c.roomId, taskName:c.taskName, taskBrief:c.taskBrief,
+    visibility:c.visibility,
+    model,
+    engineReason: c.policy==='cpu' ? '本地策略=cpu → 强制 mlp' : 'auto：开训时按全网复核，任一节点无 GPU 即全体降 mlp',
+    rounds:c.rounds, localSteps:c.localSteps, batchSize:c.batchSize, lr:c.lr, shards:c.shards,
+    shardMode:c.shardMode,
+    corpus:{ name:c.corpusName, chars:c.corpusChars, vocabSize:c.vocabSize,
+             digest:fnv1aHex(c.corpusName+'|'+c.corpusChars+'|'+'前4096字'+'|vocab'+c.vocabSize) },
+    probe:{ size:c.probeSize, evalCount:c.probeEvalCount, tol:c.verifyTol },
+    crossCheck:c.crossCheck,
+    aggregate:{ mode:c.aggMode, outerLr:c.outerLr, momentum:c.momentum },
+    createdAt:'2026-10-08T00:40:00+08:00'
+  };
+  base.fingerprint=fingerprintOf(base);
+  return base;
+}
+
+/* ============================================================
+   4. 视图渲染
+   ============================================================ */
+const TITLES={
+  start:['入口','选择你要做什么'],probe:['能力探测','真实运行（不是写死的假数据）'],
+  base:['选起点','从任意公开 check 开房'],create:['创建房间','向导 · 右侧是实时 manifest 与指纹'],
+  room:['房间总览','房主视角'],join:['别人加入','换一个视角：手机扫码进来看到什么'],
+  train:['训练进行中','一轮联邦的 9 个阶段'],verify:['验收','共识探针 = 真复算'],
+  publish:['发布','出 check → 分支 / 提议'],audit:['血缘与账本','可事后审计'],
+  gap:['设计 ↔ 代码','哪些已经落地，哪些还只是设计']
+};
+
+function go(v){ location.hash='#/'+v; }
+function render(){
+  const v=(location.hash||'#/start').replace('#/','')||'start';
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
+  document.getElementById('ttl').textContent=TITLES[v][0];
+  document.getElementById('sub').textContent=TITLES[v][1];
+  document.getElementById('ctx').textContent = S.created ? '房间 '+S.cfg.roomId+' · 第 '+S.round+' 轮' : '没有房间';
+  document.getElementById('ctx').className = 'chip '+(S.created?(S.cfg.visibility==='L2'?'l2':'l0'):'');
+  document.getElementById('whoami').textContent = S.created ? '@我 · 房主' : '@我 · 未入房';
+  document.getElementById('scroll').innerHTML = VIEWS[v]();
+  if(AFTER[v]) AFTER[v]();
+  document.getElementById('scroll').scrollTop=0;
+}
+document.querySelectorAll('.rail .nav').forEach(n=>n.addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(b) go(b.dataset.v);
+}));
+window.addEventListener('hashchange',render);
+
+/* ---------- 视图：start ---------- */
+const VIEWS={};
+
+VIEWS.start=()=>`
+  <div class="picks">
+    <div class="pick" data-go="probe"><div class="t">我要建一个训练房间</div>
+      <div class="s">先看看这台设备能干什么，再选一个公共 check 当起点。</div><div class="go">开始 →</div></div>
+    <div class="pick" data-go="join"><div class="t">我要加入别人的房间</div>
+      <div class="s">扫码或输房间号。<b>不需要懂任何参数</b>，按房主设置来。</div><div class="go">开始 →</div></div>
+    <div class="pick" data-go="base"><div class="t">我先看看（游客）</div>
+      <div class="s">只看曲线、账本、血缘。不出算力，随时可转参与者。</div><div class="go">开始 →</div></div>
+  </div>
+
+  <h2 class="sec">这条工作流会带你走完</h2>
+  <div class="card">
+    <div class="kv"><span>① 能力探测</span><b>这台机器能当什么角色</b></div>
+    <div class="kv"><span>② 选起点</span><b>从公共 check fork</b></div>
+    <div class="kv"><span>③ 创建房间</span><b>配置 + 实时指纹 + 通信预算</b></div>
+    <div class="kv"><span>④ 别人加入</span><b>手机视角：一键加入 / 只看看</b></div>
+    <div class="kv"><span>⑤ 训练进行中</span><b>9 阶段 · 成员 · 掉线不阻塞</b></div>
+    <div class="kv"><span>⑥ 验收 → 发布</span><b>共识探针真复算 → 出 check → 分支</b></div>
+    <div class="kv"><span>⑦ 血缘与账本</span><b>可事后审计</b></div>
+  </div>
+
+  <div class="anchor">技术锚点：<b>src/fed/protocol.ts</b> 的 RoomManifest / ModelSpec / fingerprintOf；
+    <b>pages/fed.html · host.html · join.html</b>（现状是四页，本 demo 串成一条流）。</div>`;
+
+/* ---------- 视图：probe ---------- */
+VIEWS.probe=()=>{
+  const c=S.cap;
+  if(!c) return `<div class="card"><div class="cap">正在真实探测这台设备…</div></div>`;
+  const yes=b=>b?'<span class="tag t">是</span>':'<span class="tag r">否</span>';
+  return `
+  <div class="row c4">
+    <div class="card"><div class="cap">设备类型</div><div class="big">${c.kind}</div><div class="cap">detectKind()</div></div>
+    <div class="card"><div class="cap">逻辑核心</div><div class="big">${c.cores||'—'}</div><div class="cap">hardwareConcurrency</div></div>
+    <div class="card"><div class="cap">设备内存</div><div class="big">${c.memGB?c.memGB+' GB':'未暴露'}</div><div class="cap">deviceMemory</div></div>
+    <div class="card"><div class="cap">适配器</div><div class="big">${c.adapterOk?'就绪':'无'}</div><div class="cap">requestAdapter()</div></div>
+  </div>
+
+  <h2 class="sec">原始探测结果（这些值是真从浏览器读的）</h2>
+  <div class="card">
+    <div class="kv"><span>isSecureContext（安全上下文）</span><b>${yes(c.secure)}</b></div>
+    <div class="kv"><span>navigator.gpu 存在</span><b>${yes(c.hasGpuApi)}</b></div>
+    <div class="kv"><span>拿到 GPUAdapter</span><b>${yes(c.adapterOk)}</b></div>
+    <div class="kv"><span>shader-f16 特性</span><b>${yes(c.f16)}</b></div>
+    <div class="kv"><span>vendor / architecture</span><b>${(c.vendor||'—')} / ${(c.arch||'—')}</b></div>
+    <div class="kv"><span>maxBufferSize</span><b>${c.maxBuf?c.maxBuf.toLocaleString()+' B':'—'}</b></div>
+    ${c.note?`<div class="kv"><span>探测异常</span><b>${c.note}</b></div>`:''}
+  </div>
+
+  <h2 class="sec">建议</h2>
+  <div class="card"><div class="${c.adapterOk&&c.f16?'okbox':'warnbox'}">${c.advise}</div></div>
+
+  <h2 class="sec">你这台设备能担任的角色（降级阶梯）</h2>
+  <div class="row c3">
+    ${c.roles.map(r=>`<div class="card"><div class="cap">${r[0]}</div>
+      <div style="margin-top:4px">${r[1]}</div><div style="margin-top:6px"><span class="tag ${r[2]}">可担任</span></div></div>`).join('')}
+  </div>
+  <div class="note">关键立场：<b>算不动不是被排除，是换角色</b>。只要能做一次前向评估，就算参与。</div>
+
+  <div class="actions" style="margin-top:16px">
+    <button class="btn" data-go="base">下一步：选起点 →</button>
+    <button class="btn ghost" id="reprobe">重新探测</button>
+  </div>
+
+  <div class="anchor">技术锚点：<b>src/fed/capability.ts</b> — detectKind / hasGpuApi / adapterOk / hasF16 / advise 三档；
+    <b>design/07 降级阶梯</b>（反传→前向→局部→零阶→仅评估→聚合）。</div>`;
+};
+
+/* ---------- 视图：base ---------- */
+const BNODES=[
+  ['b0',20,30,200,50,'base-0.5b','公共基座 · 探针 .62','#10304c','#245b8a',0],
+  ['b1',20,140,200,50,'zh-lora-v2','已结束 · 探针 .71','#2a2750','#4a4582',0],
+  ['b2',290,30,210,50,'粤语-v1','fork-only · .69','#0f3329','#1e6b53',0],
+  ['b3',290,140,210,50,'闽南语 v3','room#42 · 运行中 · .78','#2a2750','#4a4582',1],
+  ['b4',290,250,210,50,'医疗问答-v1','已并回主干 · .74','#0f3329','#1e6b53',0],
+  ['b5',560,140,220,50,'主干 main','所有 merge 的汇合点','#10304c','#245b8a',0]
+];
+const BEDGES=[['b0','b1','train',''],['b0','b2','fork','fork'],['b1','b3','fork','fork'],['b1','b4','train',''],['b3','b5','merge','p'],['b4','b5','merge','p']];
+VIEWS.base=()=>{
+  const T=Object.fromEntries(BNODES.map(n=>[n[0],{x:n[1],y:n[2],w:n[3],h:n[4]}]));
+  let g='';
+  BEDGES.forEach(e=>{
+    const A=T[e[0]],B=T[e[1]];
+    const x1=A.x+A.w,y1=A.y+A.h/2,x2=B.x,y2=B.y+B.h/2,mx=(x1+x2)/2;
+    g+=`<path class="te${e[3]==='fork'?' fork':''}${e[3]==='p'?' p':''}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`;
+    g+=`<text class="tel" x="${mx}" y="${(y1+y2)/2-5}" text-anchor="middle">${e[2]}</text>`;
+  });
+  BNODES.forEach(n=>{
+    const sel = n[5]==='zh-lora-v2' ? ' sel':'';
+    g+=`<g class="tn${sel}" data-b="${n[0]}"><rect x="${n[1]}" y="${n[2]}" width="${n[3]}" height="${n[4]}" rx="9"
+      fill="${n[6]}" stroke="${n[7]}" stroke-width="1"/><text x="${n[1]+12}" y="${n[2]+21}">${n[5]}</text>
+      <text class="sub" x="${n[1]+12}" y="${n[2]+37}">${n[6+2]?n[8]:n[8]}</text></g>`;
+  });
+  return `
+  <h2 class="sec">模型不是文件，是一棵树 —— 选一个 check 当起点</h2>
+  <div class="gwrap"><svg class="tree" viewBox="0 0 800 330">${g}</svg></div>
+  <div class="legend"><span><i></i>train</span><span><i class="d"></i>fork</span><span><i class="p"></i>merge</span></div>
+
+  <h2 class="sec">当前选中的起点（会被锁进新房间的 manifest）</h2>
+  <div class="card">
+    <div class="kv"><span>起点 check</span><b id="baseSel">${S.base}</b></div>
+    <div class="kv"><span>继承的验收套件</span><b>eval-suite-A（继承保证跨分支分数可比）</b></div>
+    <div class="kv"><span>继承的字符表</span><b>由起点 + 数据共同决定，写进指纹</b></div>
+  </div>
+  <div class="actions" style="margin-top:14px">
+    <button class="btn" data-go="create">用它开一个房间 →</button>
+    <button class="btn ghost" data-go="probe">← 回看设备能力</button>
+  </div>
+  <div class="anchor">技术锚点：<b>design/15 §3.7 从 check 开房</b>；分支树 = 内容寻址 DAG；
+    继承验收套件是为了让不同分支的分数<b>可比</b>。</div>`;
+};
+
+/* ---------- 视图：create ---------- */
+let WSTEP=0;
+VIEWS.create=()=>{
+  const c=S.cfg, m=manifest(), p=params();
+  const steps=['基本','模型','数据','配方','验收与安全','复核'];
+  const body=[
+    // 0 基本
+    ()=>`<div class="frm">
+      <div class="f"><div class="lb">房间名 / taskName</div><div class="hint">写给人看，也写进清单</div>
+        <input type="text" id="c_taskName" value="${c.taskName}"></div>
+      <div class="f"><div class="lb">任务简述 / taskBrief</div><div class="hint">一句话说清这个房间要干什么</div>
+        <input type="text" id="c_taskBrief" value="${c.taskBrief}"></div>
+      <div class="f"><div class="lb">可见性</div><div class="hint">决定开哪一档防御（对应信任分级 L0–L3）</div>
+        <div class="seg2" id="c_vis">${['L0|自家·全信','L1|熟人·半信','L2|公开·不信','L3|敌对'].map(x=>{const[k,v]=x.split('|');return `<button data-k="${k}" class="${c.visibility===k?'on':''}">${k} ${v}</button>`}).join('')}</div></div>
+    </div>`,
+    // 1 模型
+    ()=>`<div class="frm">
+      <div class="f"><div class="lb">引擎 / engine</div><div class="hint">auto 会在开训时按全网复核：任一节点无 GPU 就全体降到 mlp</div>
+        <div class="seg2" id="c_engine">
+          <button data-k="mlp" class="${c.engine==='mlp'?'on':''}">mlp（纯 JS，任何设备可跑）</button>
+          <button data-k="gpu-tinygpt" class="${c.engine==='gpu-tinygpt'?'on':''}">gpu-tinygpt（需 WebGPU）</button></div></div>
+      <div class="f"><div class="lb">规格档 / preset</div><div class="hint">对应 ModelPreset small / medium / large</div>
+        <div class="seg2" id="c_preset">${['small','medium','large'].map(x=>`<button data-k="${x}" class="${c.preset===x?'on':''}">${x}</button>`).join('')}</div></div>
+      ${c.engine==='mlp'?`
+      <div class="f"><div class="lb">MLP 结构</div><div class="hint">vocabSize / ctx / embDim / hidden / seed</div>
+        <div class="row c2" style="gap:8px">
+          <div><div class="cap">ctx <span class="mono" id="v_ctx">${c.ctx}</span></div><input type="range" id="c_ctx" min="16" max="256" step="16" value="${c.ctx}"></div>
+          <div><div class="cap">embDim <span class="mono" id="v_emb">${c.embDim}</span></div><input type="range" id="c_embDim" min="16" max="256" step="16" value="${c.embDim}"></div>
+        </div></div>`:`
+      <div class="f"><div class="lb">GPU 结构</div><div class="hint">blockSize / nLayer / nHead / nEmbd / bias / maxBatch / seed</div>
+        <div class="row c2" style="gap:8px">
+          <div><div class="cap">blockSize <span class="mono" id="v_blockSize">${c.blockSize}</span></div><input type="range" id="c_blockSize" min="32" max="256" step="32" value="${c.blockSize}"></div>
+          <div><div class="cap">nLayer <span class="mono" id="v_nLayer">${c.nLayer}</span></div><input type="range" id="c_nLayer" min="2" max="12" step="1" value="${c.nLayer}"></div>
+        </div></div>`}
+      <div class="f"><div class="lb">本地引擎策略 / enginePolicy</div><div class="hint">现状只有 auto|cpu 两档（刻意没有"只用 WebGPU"）</div>
+        <div class="seg2" id="c_policy"><button data-k="auto" class="${c.policy==='auto'?'on':''}">auto</button><button data-k="cpu" class="${c.policy==='cpu'?'on':''}">cpu</button></div></div>
+    </div>`,
+    // 2 数据
+    ()=>`<div class="frm">
+      <div class="f"><div class="lb">语料 / corpus</div><div class="hint">CorpusRef：name + chars + vocab（字符表由语料唯一确定）</div>
+        <input type="text" id="c_corpusName" value="${c.corpusName}"></div>
+      <div class="f"><div class="lb">分片数 / shards</div><div class="hint">按块交错分给各节点</div>
+        <input type="range" id="c_shards" min="2" max="8" step="1" value="${c.shards}"><div class="cap">${c.shards} 片</div></div>
+      <div class="f"><div class="lb">分片方式 / shardMode</div><div class="hint">设计默认"块交错"；连续切片是本项目的已知债务</div>
+        <div class="seg2" id="c_shardMode">
+          <button data-k="interleave" class="${c.shardMode==='interleave'?'on':''}">块交错（设计默认）</button>
+          <button data-k="contiguous" class="${c.shardMode==='contiguous'?'on':''}">连续切片（现状实现）</button></div></div>
+      <div class="f"><div class="lb">探针窗口 / probe</div><div class="hint">所有节点都能读到的一段公共数据；用于交叉验证</div>
+        <div class="kv"><span>size</span><b>${c.probeSize} 字</b></div>
+        <div class="kv"><span>位置</span><b>全集 50% 处取中段（代码现状）</b></div>
+        ${c.shardMode==='interleave'?'':'<div class="warnbox" style="margin-top:6px">选"连续切片"时探针区间<b>没有被排除在分片之外</b>——这正是设计里 INV-17 要修的问题。</div>'}</div>
+      <div class="f"><div class="lb">数据许可与分布</div><div class="hint">进公地的前提</div>
+        <div class="kv"><span>license</span><b>CC-BY-4.0</b></div>
+        <div class="kv"><span>distribution（分布登记）</span><b>英 100% → 待补中文配比</b></div></div>
+    </div>`,
+    // 3 配方
+    ()=>`<div class="frm">
+      <div class="row c2" style="gap:10px">
+        <div class="f"><div class="lb">轮数 / rounds</div><div class="hint">联邦同步的总轮数</div>
+          <input type="range" id="c_rounds" min="2" max="60" step="1" value="${c.rounds}"><div class="cap">${c.rounds} 轮</div></div>
+        <div class="f"><div class="lb">本地步数 / localSteps</div><div class="hint">越大通信越省（DiLoCo 的前提）</div>
+          <input type="range" id="c_localSteps" min="1" max="50" step="1" value="${c.localSteps}"><div class="cap">${c.localSteps} 步/轮</div></div>
+      </div>
+      <div class="row c2" style="gap:10px">
+        <div class="f"><div class="lb">批大小 / batchSize</div><input type="range" id="c_batchSize" min="1" max="32" step="1" value="${c.batchSize}"><div class="cap">${c.batchSize}</div></div>
+        <div class="f"><div class="lb">学习率 / lr</div><div class="hint">${c.lr}</div><input type="range" id="c_lr" min="1" max="20" step="1" value="6"></div>
+      </div>
+      <div class="f"><div class="lb">聚合方式 / aggregate.mode</div><div class="hint">DiLoCo 与 FedAvg 共用"基准点+加权增量"骨架；FedAvg = β=0,η=1 的特例</div>
+        <div class="seg2" id="c_aggMode"><button data-k="fedavg" class="${c.aggMode==='fedavg'?'on':''}">fedavg</button><button data-k="diloco" class="${c.aggMode==='diloco'?'on':''}">diloco</button></div></div>
+      ${c.aggMode==='diloco'?`<div class="f"><div class="lb">DiLoCo 超参</div>
+        <div class="kv"><span>外层学习率 outerLr (η)</span><b>${c.outerLr}</b></div>
+        <div class="kv"><span>外层动量 momentum (β)</span><b>${c.momentum}</b></div>
+        <div class="note" style="margin-top:4px">本项目实测：小规模下 FedAvg 反而更好，故默认 fedavg。</div></div>`:''}
+      <div class="f"><div class="lb">通信压缩</div><div class="hint">设计支持 top-k + 量化，且必须带误差反馈（否则偏置不衰减）</div>
+        <div class="seg2" id="c_compress"><button data-k="none" class="on">不压缩</button><button data-k="topk" class="">top-3% + 2bit（设计，未实现）</button></div></div>
+    </div>`,
+    // 4 验收与安全
+    ()=>`<div class="frm">
+      <div class="f"><div class="lb">探针评估条数 / probeEvalCount</div><div class="hint">每轮算多少条来估 probeLoss（越少越省，越多越准）</div>
+        <input type="range" id="c_probeEvalCount" min="32" max="1024" step="32" value="${c.probeEvalCount}"><div class="cap">${c.probeEvalCount} 条</div></div>
+      <div class="f"><div class="lb">验收容差 / verifyTol</div><div class="hint">跨设备浮点不可逐位一致，所以只能比容差（不能哈希对拍）</div>
+        <div class="kv"><span>容差</span><b>1e-3（相对）</b></div></div>
+      <div class="f"><div class="lb">交叉验证 / crossCheck</div><div class="hint">现状代码里默认<b>关</b>：关掉时 verify() 直接返回 ok，不做复算</div>
+        <div class="seg2" id="c_crossCheck"><button data-k="false" class="${!c.crossCheck?'on':''}">关（默认，省一次评估）</button><button data-k="true" class="${c.crossCheck?'on':''}">开（真复算，抓谎报）</button></div></div>
+      <div class="f"><div class="lb">独立验证节点数 k-of-n</div><div class="hint">公开房间（L2）设计要求 ≥3 个独立复算</div>
+        <div class="kv"><span>当前可见性</span><b>${c.visibility}</b></div>
+        <div class="kv"><span>k-of-n</span><b>${c.visibility==='L0'?'不需要':(c.visibility==='L2'||c.visibility==='L3')?'≥ 3 独立验证':'≥ 1'}</b></div></div>
+      <div class="f"><div class="lb">隐私开关（设计，未实现）</div><div class="hint">梯度裁剪 + 高斯噪声；默认关</div>
+        <div class="kv"><span>DP-SGD</span><b>关闭</b></div></div>
+    </div>`,
+    // 5 复核
+    ()=>`<div class="frm">
+      <div class="f"><div class="lb">即将锁定的清单（manifest）</div><div class="hint">右侧是全文；指纹由键排序 JSON 做 FNV-1a 得到</div>
+        <div class="kv"><span>roomId</span><b>${c.roomId}</b></div>
+        <div class="kv"><span>fingerprint</span><b class="mono">${m.fingerprint}</b></div>
+        <div class="kv"><span>参数量</span><b>${params().toLocaleString()}</b></div>
+        <div class="kv"><span>全量权重帧</span><b>${frameBytes(params()).toLocaleString()} B</b></div>
+      </div>
+      <div class="okbox">一旦创建，这个指纹就是"全网一致"的凭据：任何一台设备的语料/结构不一致，指纹当场对不上。</div>
+      <div class="badbox">同一份清单在两端算出不同指纹 ⇒ 拒绝入房。这就是为什么"字符表必须全网一致"是硬约束。</div>
+    </div>`
+  ][WSTEP]();
+
+  return `
+  <div class="wsteps">${steps.map((s,i)=>`<span class="wstep ${i===WSTEP?'on':(i<WSTEP?'done':'')}">${i+1}. ${s}</span>`).join('')}</div>
+  <div class="wz">
+    <div>
+      ${body}
+      <div class="actions" style="margin-top:14px">
+        <button class="btn ghost" id="wPrev" ${WSTEP===0?'disabled':''}>← 上一步</button>
+        ${WSTEP<5?`<button class="btn" id="wNext">下一步 →</button>`
+                 :`<button class="btn" id="wMake">创建房间并发布</button>`}
+      </div>
+    </div>
+    <div class="side">
+      <div class="card"><div class="cap">清单指纹 / fingerprint</div><div class="fp" id="fpBox">${m.fingerprint}</div>
+        <div class="note" style="margin-top:6px">改任何一个参数，这个值都会变。</div></div>
+      <div class="card"><div class="cap">通信预算（一轮）</div>
+        <div class="kv"><span>全量 fp32</span><b>${frameBytes(params()).toLocaleString()} B</b></div>
+        <div class="kv"><span>LoRA 增量</span><b>${loraBytes(params()).toLocaleString()} B</b></div>
+        <div class="kv"><span>top-3%+2bit</span><b>${sparseBytes(params()).toLocaleString()} B</b></div>
+        <div class="kv"><span>上行 5 Mbps 时</span><b>${secs(frameBytes(params()),5).toFixed(1)} s / 轮</b></div>
+        <div class="note">规模由<b>上行带宽</b>倒推，不是显存。全量 13,521 参数 ≈ 54 KB（含 216 B 头），实测一帧 54,300 字节。</div></div>
+      <div class="card"><div class="cap">统计功效（探针）</div>
+        <div class="kv"><span>n</span><b>${c.probeEvalCount}</b></div>
+        <div class="kv"><span>σ ≈ √(p(1−p)/n)，p=0.6</span><b>±${(Math.sqrt(0.6*0.4/c.probeEvalCount)*100).toFixed(1)}%</b></div>
+        <div class="note">n 太小 ⇒ 噪声比真实改动还大。设计里要求配对 CRN + MDE 检查。${c.probeEvalCount<128?'<b>当前 n 偏小。</b>':'当前 n 尚可。'}</div></div>
+      <div class="card"><div class="cap">数据分片预览（${c.shards} 片）</div>
+        ${shardPreview()}</div>
+    </div>
+  </div>
+  <div class="anchor">技术锚点：<b>src/fed/protocol.ts</b> RoomManifest / ModelSpec / AggregateSpec / fingerprintOf；
+    <b>src/fed/corpus.ts</b> shardText / pickProbe；<b>design/03 IR</b>、<b>09 联邦协议</b>、<b>11 §2.6 分片拓扑</b>。</div>`;
+};
+function shardPreview(){
+  const c=S.cfg, n=c.shards, blocks=24;
+  let out='<div class="mono" style="font-size:10px;line-height:1.9;color:var(--dim)">';
+  for(let i=0;i<blocks;i++){
+    const owner = c.shardMode==='interleave' ? (i%n) : Math.min(n-1,Math.floor(i/n*1));
+    const col=c.shardMode==='interleave' ? ['#7f77dd','#5dcaa5','#85b7eb','#ef9f27','#97c459','#d4537e','#e24b4a','#afa9ec'][owner%8]
+                                         : ['#7f77dd','#5dcaa5','#85b7eb','#ef9f27','#97c459','#d4537e','#e24b4a','#afa9ec'][owner%8];
+    out+=`<span style="color:${col}">█</span>`;
+  }
+  out+='</div>';
+  out+= c.shardMode==='interleave'
+    ? '<div class="note">交错：每个节点都拿到"各文体的混合"，分布接近全集。</div>'
+    : '<div class="note">连续：节点各拿一段 —— 各节点看到不同文体配比，正是 non-IID 最坏情形。</div>';
+  return out;
+}
+const AFTER={};
+AFTER.probe=()=>{
+  const r=document.getElementById('reprobe');
+  if(r) r.addEventListener('click',async()=>{toast('重新探测中…');S.cap=await probe();render();});
+};
+AFTER.create=()=>{
+  const bind=(id,fn)=>{const e=document.getElementById(id); if(e) e.addEventListener('input',()=>{fn(e.value);refresh()});};
+  bind('c_taskName',v=>S.cfg.taskName=v); bind('c_taskBrief',v=>S.cfg.taskBrief=v);
+  bind('c_ctx',v=>{S.cfg.ctx=+v;const s=document.getElementById('v_ctx');if(s)s.textContent=v;});
+  bind('c_embDim',v=>{S.cfg.embDim=+v;const s=document.getElementById('v_emb');if(s)s.textContent=v;});
+  bind('c_blockSize',v=>{S.cfg.blockSize=+v;const s=document.getElementById('v_blockSize');if(s)s.textContent=v;});
+  bind('c_nLayer',v=>{S.cfg.nLayer=+v;const s=document.getElementById('v_nLayer');if(s)s.textContent=v;});
+  bind('c_corpusName',v=>S.cfg.corpusName=v);
+  ['c_shards','c_rounds','c_localSteps','c_batchSize','c_probeEvalCount'].forEach(id=>bind(id,v=>S.cfg[id.slice(2)]=+v));
+  bind('c_lr',v=>S.cfg.lr=+(0.0001*(+v)));
+  // 分段按钮
+  const seg=(id,key,cast)=>{const e=document.getElementById(id); if(!e) return;
+    e.addEventListener('click',ev=>{const b=ev.target.closest('button'); if(!b) return;
+      const k=b.dataset.k; const val = cast?cast(k):k;
+      S.cfg[key]=val;
+      if(key==='visibility'&&k==='L0') S.cfg.crossCheck=false;
+      [...e.querySelectorAll('button')].forEach(x=>x.classList.toggle('on',x===b));
+      render();});
+  };
+  seg('c_vis','visibility'); seg('c_engine','engine'); seg('c_preset','preset');
+  seg('c_policy','policy'); seg('c_shardMode','shardMode'); seg('c_aggMode','aggMode');
+  seg('c_crossCheck','crossCheck',k=>k==='true');
+  const prev=document.getElementById('wPrev'); if(prev) prev.addEventListener('click',()=>{WSTEP=Math.max(0,WSTEP-1);render();});
+  const next=document.getElementById('wNext'); if(next) next.addEventListener('click',()=>{WSTEP=Math.min(5,WSTEP+1);render();});
+  const mk=document.getElementById('wMake'); if(mk) mk.addEventListener('click',()=>{
+    S.created=true; toast('<b>房间已创建</b>：fingerprint <span class="mono">'+manifest().fingerprint+'</span>，已发布到公地。你是房主。'); go('room');
+  });
+};
+function refresh(){ const e=document.getElementById('fpBox'); if(e) e.textContent=manifest().fingerprint; }
+
+/* ---------- 视图：room ---------- */
+let RTAB='collab';
+VIEWS.room=()=>{
+  if(!S.created) return gate();
+  const c=S.cfg,m=manifest();
+  const tabs=[['collab','协作'],['roles','角色'],['devices','设备']];
+  return `
+  <div class="actions" style="margin-bottom:14px">${tabs.map(t=>`<button class="btn ${RTAB===t[0]?'':'ghost'} sm" data-rt="${t[0]}">${t[1]}</button>`).join('')}</div>
+  ${RTAB==='collab'?`
+    <div class="row c4">
+      <div class="card"><div class="cap">清单指纹</div><div class="fp" style="font-size:13px">${m.fingerprint}</div></div>
+      <div class="card"><div class="cap">轮次</div><div class="big">${S.round}/${c.rounds}</div><div class="cap">每轮 ${c.localSteps} 步</div></div>
+      <div class="card"><div class="cap">成员</div><div class="big">6</div><div class="cap">含 7 位游客</div></div>
+      <div class="card"><div class="cap">可见性</div><div class="big" style="font-size:15px">${c.visibility}</div><div class="cap">${c.visibility==='L2'?'公开 · 需 ≥3 独立验证':'自有设备'}</div></div>
+    </div>
+    <h2 class="sec">房间清单（房间宪法）</h2>
+    <div class="card pad0"><table>
+      <tbody>
+        <tr><td>taskName</td><td>${c.taskName}</td></tr>
+        <tr><td>model.engine</td><td>${c.engine} · preset ${c.preset}</td></tr>
+        <tr><td>corpus.digest</td><td class="mono">${m.corpus.digest}</td></tr>
+        <tr><td>aggregate</td><td>${c.aggMode}${c.aggMode==='diloco'?' (η='+c.outerLr+', β='+c.momentum+')':''}</td></tr>
+        <tr><td>probe</td><td>size ${c.probeSize} · evalCount ${c.probeEvalCount} · tol ${c.verifyTol}</td></tr>
+        <tr><td>crossCheck</td><td>${c.crossCheck?'<span class="tag t">开</span> 真复算':'<span class="tag a">关</span> 不做复算'}</td></tr>
+      </tbody></table></div>
+    <div class="note">房主锁定上面这些；节点只能改自己那台机器怎么干活。</div>
+  `:RTAB==='roles'?`
+    <h2 class="sec">角色目录</h2>
+    <div class="card pad0"><table><thead><tr><th>角色</th><th>职责</th><th>门槛</th><th>必需</th></tr></thead><tbody>
+      ${[['房主 Owner','定义房间、开关轮、签账本','—','是'],
+         ['聚合端 Aggregator','执行聚合与广播','稳定在线+带宽','是(默认=房主设备)'],
+         ['训练节点 Trainer','产出 Update','能跑所选策略','是(≥1)'],
+         ['评估节点 Evaluator','只做前向与评测','极低','否'],
+         ['验证节点 Verifier','独立复算他人提交','中高','L2+ 是'],
+         ['存储节点 Pinner','为公地资产持久化','有存储','否'],
+         ['数据提供 DataProvider','只登记指纹，原文不出本地','有数据','否'],
+         ['观察者(游客)','只看曲线/账本/血缘','无','否']]
+        .map(r=>`<tr><td><b style="font-weight:500">${r[0]}</b></td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('')}
+    </tbody></table></div>
+    <h2 class="sec">本房间槽位</h2>
+    <div class="row c2">
+      ${[['房主','@我','已满'],['聚合端','@我 · 台式机','已满'],['训练节点 ×4','3/4','缺 1'],
+         ['评估节点 ×1','手机','已满'],['验证节点 ×3','2/3','缺 1（L2 要求 ≥3）'],['存储节点 ×1','@小林 · 服务器','已满']]
+        .map(s=>`<div class="card"><div class="kv"><span>${s[0]}</span><b>${s[1]}</b></div>
+          <div style="margin-top:6px"><span class="tag ${s[2]==='已满'?'t':'a'}">${s[2]}</span></div></div>`).join('')}
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn sm" data-t="招募已发布：会出现在公地，按门槛筛选（不达即不派单）">发布招募</button>
+      <button class="btn ghost sm" disabled>算力悬赏（规划中）</button>
+    </div>
+    <div class="note">悬赏先不做：不可验证的任务一接激励，激励就变成攻击面。先声誉、后付费。</div>
+  `:`
+    <h2 class="sec">我的设备（我是房主，可直接操作）</h2>
+    ${[['台式机','PC · 房主主机','RTX 4070 · 12GB','训练 + 聚合端','46%','on'],
+       ['公司笔记本','笔记本','集显 · 无 WebGPU','训练（降级：前向档）','22%','warn'],
+       ['华为平板','移动端','WebGPU 受限','评估节点','8%','warn']]
+      .map(d=>`<div class="card" style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:9px"><span class="led ${d[5]}"></span>
+          <div><b style="font-weight:500">${d[0]}</b><div class="cap">${d[1]}</div></div>
+          <div class="spacer" style="flex:1"></div><span class="tag p">我的</span></div>
+        <div class="row c4" style="margin-top:9px">
+          <div><div class="cap">能力</div>${d[2]}</div><div><div class="cap">角色</div>${d[3]}</div>
+          <div><div class="cap">贡献份额</div>${d[4]}</div><div><div class="cap">我能做</div>改派角色</div></div>
+        <div class="actions" style="margin-top:8px">
+          <button class="btn ghost sm">改派角色</button><button class="btn ghost sm">设为聚合端</button>
+          <button class="btn ghost sm">限速</button><button class="btn ghost sm">退出本房间</button></div>
+      </div>`).join('')}
+    <h2 class="sec">其它成员的设备（不是我的，只能请求）</h2>
+    ${[['@小林 的 4090 主机','训练节点','在线','22%'],['@阿彬 的 平板','评估节点','切后台','8%'],['v-eval-03（志愿者）','验证节点','复算中','6%']]
+      .map(d=>`<div class="card" style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:9px"><span class="led on"></span>
+          <div><b style="font-weight:500">${d[0]}</b><div class="cap">${d[1]} · ${d[2]}</div></div>
+          <div class="spacer" style="flex:1"></div><span class="tag b">份额 ${d[3]}</span></div>
+        <div class="actions" style="margin-top:8px"><button class="btn ghost sm" data-t="已发出请求，由对方决定">请求协助</button></div>
+        <div class="note">只能请求，不能操作 —— 那不是我拥有的设备。</div></div>`).join('')}
+  `}
+  <div class="actions" style="margin-top:16px">
+    <button class="btn" data-go="train">进入训练 →</button>
+    <button class="btn ghost" data-go="join">看别人加入的视角 →</button>
+  </div>
+  <div class="anchor">技术锚点：<b>design/15 §3.5 角色目录（设备≠角色）</b>、<b>§3.6 双模</b>；
+    <b>src/fed/protocol.ts</b> 的 RoomManifest 就是"房间宪法"。</div>`;
+};
+AFTER.room=()=>{
+  document.querySelectorAll('[data-rt]').forEach(b=>b.addEventListener('click',()=>{RTAB=b.dataset.rt;render();}));
+};
+
+/* ---------- 视图：join（手机视角） ---------- */
+let JOINED=false;
+VIEWS.join=()=>`
+  <div class="row c2" style="align-items:start">
+    <div>
+      <h2 class="sec">扫码进来的那个人，看到的就是这一屏</h2>
+      <div class="phone"><div class="notch"></div><div class="scr">
+        <div><b style="font-weight:500">${S.created?S.cfg.taskName:'闽南语医疗方言'}</b>
+          <div class="cap">房主 @我 · ${S.created?S.cfg.visibility:'L2'} · ${S.created?S.cfg.rounds:20} 轮 · 已有 6 人</div></div>
+        <div class="kv"><span>你要做什么</span><b>什么都不用选</b></div>
+        <div class="kv"><span>预计占用</span><b>按你的设备自动定</b></div>
+        ${JOINED?`
+          <div class="okbox">已加入。<b>你的角色：评估节点</b>（因为这台设备 WebGPU 受限）。<br>
+            你的任务只有一句话：<b>每轮把模型在探针上的表现算一遍并上报。</b></div>
+          <div class="kv"><span>当前进度</span><b>第 1 轮 / 共 20 轮</b></div>
+          <div class="kv"><span>你的贡献</span><b>评估 256 条 / 轮</b></div>
+        `:`
+          <button class="bigbtn" data-join="1">加入（按房主设置）</button>
+          <button class="bigbtn q" data-guest="1">我只是看看（游客）</button>
+          <div class="cap">不需要注册，不需要装东西，不需要懂联邦学习。</div>
+        `}
+      </div></div>
+    </div>
+    <div>
+      <h2 class="sec">这套体验背后的三条设计</h2>
+      <div class="card"><div class="kv"><span>① 一个按钮</span><b>按房主设置</b></div>
+        <div class="note">小白只有两个动作：加入 / 只看看。所有参数由房主清单决定。</div></div>
+      <div class="card" style="margin-top:10px"><div class="kv"><span>② 自动挑角色</span><b>降级阶梯</b></div>
+        <div class="note">算得动→训练节点；只能前向→评估节点；都不想动→游客。永不"因为太弱被拒"。</div></div>
+      <div class="card" style="margin-top:10px"><div class="kv"><span>③ 游客是一等角色</span><b>随时转参与者</b></div>
+        <div class="note">比注册还轻的入口；先看爽了再决定要不要出算力。</div></div>
+      <div class="actions" style="margin-top:14px">
+        <button class="btn ghost" data-go="probe">看看我这台设备能当什么 →</button>
+      </div>
+    </div>
+  </div>
+  <div class="anchor">技术锚点：<b>design/15 §3.6 双模</b>（小白=≤3 动作）；<b>07 降级阶梯</b>；
+    <b>pages/join.html</b> 现状需要用户手输房间号，本 demo 把它压成一个按钮。</div>`;
+
+/* ---------- 视图：train ---------- */
+const PHASE_NAMES=['开轮广播','本地训练','等待上报','校验/复算','聚合','写回权重','探针评估','编码权重','背压广播'];
+let TP=1;
+const MEM=[
+  ['@我','房主+聚合端','台式机','on','运行中','120','3.39','—','ok'],
+  ['@小林','训练节点','4090 主机','on','运行中','120','3.42','0.18','ok'],
+  ['@阿彬','训练节点','笔记本','on','运行中','96','3.51','0.21','ok'],
+  ['v-mobile-07','评估节点','平板','warn','切后台','—','—','—','timeout'],
+  ['v-eval-03','验证节点','服务器','on','复算中','—','3.41','—','ok'],
+  ['v-bad-11','训练节点','未知','off','谎报 probeLoss','120','4.39','0.02','suspect']
+];
+VIEWS.train=()=>`
+  <div class="row c4">
+    <div class="card"><div class="cap">轮次</div><div class="big">${S.round} / ${S.cfg.rounds}</div><div class="cap">每轮 ${S.cfg.localSteps} 步</div></div>
+    <div class="card"><div class="cap">当前阶段</div><div class="big">${TP}/9</div><div class="cap">${PHASE_NAMES[TP-1]}</div></div>
+    <div class="card"><div class="cap">Goodput</div><div class="big">0.82</div><div class="cap">等待/重连损耗 18%</div></div>
+    <div class="card"><div class="cap">本轮通信</div><div class="big">${(frameBytes(params())/1024).toFixed(0)} KB</div><div class="cap">上限 80 MB</div></div>
+  </div>
+
+  <h2 class="sec">一轮的 9 个阶段（命名取自 hostRound 的真实事件顺序）</h2>
+  <div class="card"><div class="phases">
+    ${PHASE_NAMES.map((n,i)=>`<span class="ph ${i+1<TP?'done':(i+1===TP?'now':'')}"><span class="n">${i+1}</span><span class="lb">${n}</span></span>`).join('')}
+  </div>
+  <div class="actions" style="margin-top:12px">
+    <button class="btn sm" id="tick">推进下一阶段</button>
+    <button class="btn ghost sm" id="nextRound">完成本轮 →</button>
+    <button class="btn ghost sm" id="killOne">制造一次掉线</button>
+  </div></div>
+
+  <h2 class="sec">成员状态（字段与代码的 LedgerEntry 一致）</h2>
+  <div class="card pad0"><table>
+    <thead><tr><th>节点</th><th>角色</th><th>设备</th><th>状态</th><th class="num">samples</th><th class="num">probeLoss</th><th class="num">deltaNorm</th><th>verdict</th></tr></thead>
+    <tbody>${MEM.map(m=>`<tr>
+      <td><span class="led ${m[3]}"></span>${m[0]}</td><td><span class="tag">${m[1]}</span></td><td>${m[2]}</td>
+      <td>${m[4]}</td><td class="num">${m[5]}</td><td class="num">${m[6]}</td><td class="num">${m[7]}</td>
+      <td>${m[8]==='ok'?'<span class="tag t">ok</span>':m[8]==='suspect'?'<span class="tag r">suspect</span>':'<span class="tag a">timeout</span>'}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>
+
+  <h2 class="sec">事件日志（常量取自代码）</h2>
+  <div class="log" id="tlog">${logText()}</div>
+
+  <div class="actions" style="margin-top:16px">
+    <button class="btn" data-go="verify">训练完，进入验收 →</button>
+  </div>
+  <div class="anchor">技术锚点：<b>src/fed/node.ts</b> hostRound（真实阶段顺序）+ 常量
+    ROUND_TIMEOUT_MS=12000 / READY_WINDOW_MS=10000 / MAX_MISSES=3 / VERIFY_TOL=1e-3 / PROBE_EVAL_COUNT=256；
+    <b>design/02 §3.2</b> 一轮联邦训练。</div>`;
+
+function logText(){
+  const L=[];
+  L.push('<span class="k">round/open</span> round='+S.round+' localSteps='+S.cfg.localSteps+' batch='+S.cfg.batchSize);
+  L.push('assign: shards='+S.cfg.shards+' · mode='+S.cfg.shardMode+(S.cfg.shardMode==='contiguous'?' <span class="w">(连续切片：设计债务)</span>':''));
+  L.push('localPhase … A=120步 B=120步 C=96步');
+  L.push('<span class="w">v-mobile-07 未在 READY_WINDOW_MS=10000 内就绪</span> → 按时开跑（如实少报）');
+  L.push('report: 收到 5/6 份 Update');
+  if(TP>=4){
+    L.push(S.cfg.crossCheck
+      ? 'verify: <span class="g">真复算</span> probeEvalCount='+S.cfg.probeEvalCount+' · 容差 '+S.cfg.verifyTol
+      : 'verify: <span class="w">crossCheck=false ⇒ 直接返回 ok，不做复算</span>');
+    L.push('<span class="e">v-bad-11 自报 probeLoss=4.39，复算 3.41，Δ=0.98 &gt; 1e-3 ⇒ verdict=suspect，本轮剔除</span>');
+  }
+  if(TP>=5) L.push('aggregateGlobal(base, accepted, sizes) —— <span class="w">注意：fedAvg 无 steps 参数 ⇒ 步数归一化(FedNova)未实现</span>');
+  if(TP>=6) L.push('setWeights(global) · evalProbe(256条) → probeLoss=3.38');
+  if(TP>=7) L.push('encodeWeights(global) → magic '+MAGIC+' · 帧 '+frameBytes(params()).toLocaleString()+' B · digest=fnv1a');
+  if(TP>=8) L.push('<span class="k">broadcastBinary</span> 背压发送 DC_HIGH_WATER=512KB CHUNK=16KB');
+  if(TP>=9) L.push('<span class="k">round/close</span> stats={round,globalLoss,prevGlobalLoss,online,aggregated,bytes,elapsedMs}');
+  L.push('v-mobile-07 心跳恢复 → 下一轮自动加入（<span class="g">弹性成员，掉线不阻塞</span>，MAX_MISSES=3）');
+  return L.join('\n');
+}
+AFTER.train=()=>{
+  const t=document.getElementById('tick'); if(t) t.addEventListener('click',()=>{TP=TP%9+1;render();});
+  const n=document.getElementById('nextRound'); if(n) n.addEventListener('click',()=>{S.round=Math.min(S.cfg.rounds,S.round+1);TP=1;toast('进入第 '+S.round+' 轮');render();});
+  const k=document.getElementById('killOne'); if(k) k.addEventListener('click',()=>toast('已注入一次掉线：v-mobile-07 被切后台，本轮 verdict=timeout，训练不中断。'));
+};
+
+/* ---------- 视图：verify ---------- */
+VIEWS.verify=()=>{
+  const c=S.cfg;
+  const rows=[['@我',3.3901,3.3901],['@小林',3.4203,3.4197],['@阿彬',3.5108,3.5101],['v-bad-11',4.3851,3.3851]];
+  return `
+  <h2 class="sec">共识探针：不是"相信上报"，是主机自己重算一遍</h2>
+  <div class="card">
+    <div class="kv"><span>机制</span><b>新建 probeEngine → setWeights(提交的权重) → evalAt(probeIds, ${c.probeEvalCount}) → 与自报 probeLoss 比对</b></div>
+    <div class="kv"><span>容差</span><b>${c.verifyTol}（跨设备浮点不可能逐位一致）</b></div>
+    <div class="kv"><span>现状</span><b>${c.crossCheck?'已开启（会真复算）':'<span class="tag a">默认关</span> 关的时候 verify() 直接返回 ok —— 这一条必须诚实标注'}</b></div>
+  </div>
+
+  <h2 class="sec">跑一遍（数字取自仓库 e2e 测试的真实结果）</h2>
+  <div class="card pad0"><table>
+    <thead><tr><th>节点</th><th class="num">自报 probeLoss</th><th class="num">主机复算</th><th class="num">Δ</th><th>判定</th></tr></thead>
+    <tbody>${rows.map(r=>{const d=Math.abs(r[1]-r[2]);const bad=d>c.verifyTol;
+      return `<tr><td>${r[0]}</td><td class="num">${r[1].toFixed(4)}</td><td class="num">${r[2].toFixed(4)}</td>
+      <td class="num">${d.toFixed(4)}</td><td>${bad?'<span class="tag r">异常 · 剔除本轮</span>':'<span class="tag t">通过</span>'}</td></tr>`}).join('')}
+    </tbody></table></div>
+  <div class="badbox" style="margin-top:10px">v-bad-11 自报 4.3851，复算 3.3851，Δ=1.0000 → 超过 1e-3，本轮被剔除，其余节点照常聚合。</div>
+
+  <h2 class="sec">统计层：这一轮"变好了"是真的吗？</h2>
+  <div class="card">
+    <div class="kv"><span>探针条数 n</span><b>${c.probeEvalCount}</b></div>
+    <div class="kv"><span>比率噪声 σ ≈ √(p(1−p)/n)</span><b>±${(Math.sqrt(0.6*0.4/c.probeEvalCount)*100).toFixed(1)}%</b></div>
+    <div class="kv"><span>本轮真实改动</span><b>−0.4%（小于噪声）</b></div>
+    <div class="warnbox" style="margin-top:8px">${c.probeEvalCount<128
+      ? 'n 太小 ⇒ 噪声比真实改动还大，这一轮"进步"可能是噪声。设计要求：不达 MDE 就报 EVAL_UNDERPOWERED 并拒绝写进决策字段。'
+      : 'n 尚可，但仍需配对 CRN（同批 item、同序）才能做配对差分。'}</div>
+    <div class="note">这一层（配对 CRN + MDE）<b>代码尚未实现</b>，见下一页对照表。</div>
+  </div>
+
+  <h2 class="sec">判定</h2>
+  <div class="okbox">验收通过：探针 0.63 [0.60, 0.66]，下界达阈，通用能力 −0.4%。结论带区间，可被第三方重放。</div>
+
+  <div class="actions" style="margin-top:16px"><button class="btn" data-go="publish">出 check，去发布 →</button></div>
+  <div class="anchor">技术锚点：<b>src/fed/node.ts verify()</b>（真复算，但受 crossCheck 门控）；
+    <b>design/09 §6 验证义务化</b>、<b>11 §2.4 统计铁律 INV-21</b>。</div>`;
+};
+
+/* ---------- 视图：publish ---------- */
+VIEWS.publish=()=>`
+  <h2 class="sec">本轮产出的 check</h2>
+  <div class="card">
+    <div class="kv"><span>名称</span><b>${S.cfg.taskName} v4</b></div>
+    <div class="kv"><span>check</span><b class="mono">4e08d3</b></div>
+    <div class="kv"><span>探针</span><b>0.63 [0.60, 0.66] · 通用 −0.4%</b></div>
+    <div class="kv"><span>父对象</span><b>${S.base}</b></div>
+  </div>
+  <h2 class="sec">怎么发布</h2>
+  <div class="card">
+    <div class="actions">
+      <button class="btn sm" data-t="已作为<b>新分支</b>发布：任何人可以从这个 check 开自己的训练房。">作为新分支发布</button>
+      <button class="btn ghost sm" data-t="已发<b>提议</b>：先过机器闸门（探针配对差分），再由主干维护者裁决。">发提议，回主干</button>
+      <button class="btn ghost sm" data-t="保持私有：只在你自己的设备与仓库可见。">保持私有</button>
+    </div>
+    <div class="note">发布 ≠ 一定被接受。被拒也不丢：它作为一条 fork 分支继续存在。</div>
+  </div>
+  <h2 class="sec">发布后，分支树长这样</h2>
+  <div class="gwrap">
+    <svg class="tree" viewBox="0 0 800 300">
+      <path class="te" d="M220 55 C 250 55 250 165 280 165"/>
+      <path class="te fork" d="M220 165 C 250 165 250 55 280 55"/>
+      <path class="te fork" d="M220 165 C 250 165 250 165 280 165"/>
+      <path class="te" d="M220 165 C 250 165 250 275 280 275"/>
+      <path class="te p" d="M490 55 C 530 55 530 165 560 165"/>
+      <path class="te p" d="M490 275 C 530 275 530 165 560 165"/>
+      <path class="te fork" d="M490 55 C 530 55 530 100 560 100"/>
+      <g class="tn"><rect x="20" y="30" width="200" height="50" rx="9" fill="#10304c" stroke="#245b8a"/><text x="32" y="51">base-0.5b</text><text class="sub" x="32" y="67">公共基座</text></g>
+      <g class="tn"><rect x="20" y="140" width="200" height="50" rx="9" fill="#2a2750" stroke="#4a4582"/><text x="32" y="161">zh-lora-v2</text><text class="sub" x="32" y="177">起点 · .71</text></g>
+      <g class="tn"><rect x="280" y="30" width="210" height="50" rx="9" fill="#0f3329" stroke="#1e6b53"/><text x="292" y="51">粤语-v1</text><text class="sub" x="292" y="67">fork-only</text></g>
+      <g class="tn"><rect x="280" y="140" width="210" height="50" rx="9" fill="#2a2750" stroke="#4a4582"/><text x="292" y="161">闽南语 v3</text><text class="sub" x="292" y="177">room#42 起点</text></g>
+      <g class="tn"><rect x="280" y="250" width="210" height="50" rx="9" fill="#0f3329" stroke="#1e6b53"/><text x="292" y="271">医疗问答-v1</text><text class="sub" x="292" y="287">已并回主干</text></g>
+      <g class="tn sel"><rect x="560" y="75" width="210" height="50" rx="9" fill="#3a2a0c" stroke="#7a5514" stroke-width="1.6"/><text x="572" y="96">${S.cfg.taskName} v4</text><text class="sub" x="572" y="112">新产出 · .63</text></g>
+      <g class="tn"><rect x="560" y="140" width="210" height="50" rx="9" fill="#10304c" stroke="#245b8a"/><text x="572" y="161">主干 main</text><text class="sub" x="572" y="177">merge 目标</text></g>
+    </svg>
+  </div>
+  <div class="legend"><span><i></i>train</span><span><i class="d"></i>fork</span><span><i class="p"></i>merge</span></div>
+  <div class="actions" style="margin-top:14px"><button class="btn ghost" data-go="audit">看血缘与账本 →</button></div>
+  <div class="anchor">技术锚点：<b>design/11 §3 模型公地</b>（fork/merge/adapter）、<b>15 §7 Proposal</b>；
+    merge 默认 Task Arithmetic 且必须过 Probe 闸门。</div>`;
+
+/* ---------- 视图：audit ---------- */
+VIEWS.audit=()=>`
+  <h2 class="sec">账本（字段就是代码里的 LedgerEntry）</h2>
+  <div class="card pad0"><table>
+    <thead><tr><th>round</th><th>peerId</th><th>name</th><th>deviceKind</th><th class="num">samples</th><th class="num">probeLoss</th><th class="num">deltaNorm</th><th class="num">share</th><th>verdict</th></tr></thead>
+    <tbody>
+      ${[[1,'p-01','@我','Windows',120,3.3901,0.31,0.33,'ok'],
+         [1,'p-02','@小林','Windows',120,3.4203,0.29,0.33,'ok'],
+         [1,'p-03','@阿彬','Windows',96,3.5108,0.27,0.27,'ok'],
+         [1,'v-bad-11','匿名','未知',120,4.3851,0.02,0.00,'suspect'],
+         [1,'v-mobile-07','@阿彬平板','Android',0,0,0,0.00,'timeout']]
+        .map(r=>`<tr><td class="num">${r[0]}</td><td class="mono">${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td>
+          <td class="num">${r[4]}</td><td class="num">${r[5]||'—'}</td><td class="num">${r[6]||'—'}</td><td class="num">${(r[7]*100).toFixed(0)}%</td>
+          <td>${r[8]==='ok'?'<span class="tag t">ok</span>':r[8]==='suspect'?'<span class="tag r">suspect</span>':'<span class="tag a">timeout</span>'}</td></tr>`).join('')}
+    </tbody></table></div>
+  <div class="note">share 只在 verdict==='ok' 时才有值，等于 <span class="mono">samples/totalSamples</span> ——
+    也就是说：<b>份额来自节点自报的 samples</b>。设计要求的双份额与可推导份额见下一页。</div>
+
+  <h2 class="sec">血缘链</h2>
+  <div class="card">
+    <div class="chain mono" style="font-size:11.5px;line-height:2">
+      corpus <b>${manifest().corpus.digest}</b><br>
+      └─ manifest <b>${manifest().fingerprint}</b><br>
+      &nbsp;&nbsp;└─ check <b>4e08d3</b> ← ${S.base}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;└─ 贡献者 7 · peerId 可追
+    </div>
+    <div class="note">剥离任一父哈希 ⇒ 指纹对不上，任何第三方都能检出。</div>
+  </div>
+  <div class="note">现状无 Merkle 根、无 prevRoot、无签名，只有一个 entries 数组 + FNV-1a 摘要（代码注释自己写了"生产应换 SHA-256 + 签名"）。</div>
+  <div class="anchor">技术锚点：<b>src/fed/node.ts</b> 的 ledger / RoundStats；<b>design/11 §4 贡献账本</b>；
+    <b>协议层</b>见 <b>design/16 SPEC-7</b>。</div>`;
+
+/* ---------- 视图：gap ---------- */
+const GAP_OK=[
+  ['内容寻址与清单指纹','fingerprintOf = 键排序 JSON → FNV-1a','src/fed/protocol.ts','ok'],
+  ['权重帧二进制编码','magic 0x574c4644 · [u32][u32][JSON][f32] · 帧内摘要','src/fed/protocol.ts encodeWeights','ok'],
+  ['背压分块传输','CHUNK 16KB · DC_HIGH_WATER 512KB · 排空超时 8s','src/fed/transport.ts','ok'],
+  ['设备能力探测','detectKind / navigator.gpu / adapter / shader-f16 / 三档建议','src/fed/capability.ts','ok'],
+  ['共识探针真复算','新建 probeEngine → setWeights → evalAt → 比对自报','src/fed/node.ts verify()','ok'],
+  ['弹性成员','每轮重发分配 · 迟到下一轮加入 · 掉线不阻塞 · MAX_MISSES=3','src/fed/node.ts','ok'],
+  ['FedAvg / DiLoCo 共用骨架','base + 加权增量；FedAvg = β0 η1 特例','src/fed/protocol.ts aggregateGlobal','ok'],
+  ['字符表全网一致并进指纹','corpus.digest = hash(name|len|前4096字|vocab)','src/fed/protocol.ts','ok']
+];
+const GAP_NO=[
+  ['块交错分片','节点 i 取 i, i+S, i+2S… 块；禁止连续切片','shardText 用 per=floor(len/count) 连续切片','no'],
+  ['探针先切（held-out）','评测窗口在任何分片之前从全集移除','pickProbe 取中段正确，但 trainIds 仍覆盖探针区间','part'],
+  ['FedNova 步数归一化','聚合前按 E_ref/E_i 重标定增量','fedAvg(list,sizes) 无 steps 参数','no'],
+  ['聚合顺序规范化','聚合前按 peerId 排序以保证 digest 稳定','按 rosterMap 插入序聚合，无排序','no'],
+  ['双份额 nominal/effective','账本同时记名义份额与归一化有效份额','LedgerEntry 只有单个 share','no'],
+  ['份额可推导 weightDerived','份额来源=分片表×步数，不用自报','share = 自报 samples/totalSamples','no'],
+  ['贡献第三列 probeDelta','探针一阶归因 φ≈s·p·⟨∇u,Δ⟩','无该字段与计算','no'],
+  ['账本可验追加','每轮 Merkle 根 + 单权威签名 + prevRoot','只有 entries 数组 + FNV-1a','no'],
+  ['压缩 + 误差反馈','top-k/量化 + EF 残差跨轮持久','fed 层无压缩、无 efState','no'],
+  ['quorum + grace','凑够半数即聚合 + 短宽限','固定 ROUND_TIMEOUT_MS=12000 等全部','no'],
+  ['降级阶梯','算不动换角色而不是退出','只有 enginePolicy auto|cpu 两档','no'],
+  ['统计铁律（CRN + MDE）','配对比较 + 功效检查，不达报 EVAL_UNDERPOWERED','无配对种子与功效检查','no'],
+  ['隐私开关（DP/裁剪）','梯度裁剪 + 噪声，房间级可配','未实现','no'],
+  ['信任分级 L0–L3 与 L2 门票','7 条门票（信任锚/签名/DP/遗忘/份额可推导/验证义务化/后门探针）','只有 crossCheck 一个开关','part']
+];
+VIEWS.gap=()=>`
+  <div class="row c3">
+    <div class="card"><div class="cap">已落地（骨架）</div><div class="big" style="color:var(--t)">8</div><div class="cap">内容寻址 · 帧格式 · 背压 · 探测 · 真复算 · 弹性成员</div></div>
+    <div class="card"><div class="cap">部分实现</div><div class="big" style="color:var(--a)">2</div><div class="cap">探针先切 · 信任分级</div></div>
+    <div class="card"><div class="cap">仍是设计（未进代码）</div><div class="big" style="color:var(--r)">12</div><div class="cap">契约层与统计层</div></div>
+  </div>
+
+  <h2 class="sec">已经落地的（所以这个 demo 不是空想）</h2>
+  <div class="card pad0"><table class="gap">
+    <thead><tr><th>能力</th><th>说明</th><th>代码位置</th><th></th></tr></thead>
+    <tbody>${GAP_OK.map(g=>`<tr><td><b style="font-weight:500">${g[0]}</b></td><td>${g[1]}</td>
+      <td class="mono" style="font-size:10.5px">${g[2]}</td><td><span class="st ok">已实现</span></td></tr>`).join('')}
+    </tbody></table></div>
+
+  <h2 class="sec">设计已定、代码还没上（这是本项目的真实债务，不是 demo 编的）</h2>
+  <div class="card pad0"><table class="gap">
+    <thead><tr><th>设计要求</th><th>要求内容</th><th>代码现状</th><th></th></tr></thead>
+    <tbody>${GAP_NO.map(g=>`<tr><td><b style="font-weight:500">${g[0]}</b></td><td>${g[1]}</td>
+      <td class="mono" style="font-size:10.5px">${g[2]}</td>
+      <td><span class="st ${g[3]}">${g[3]==='part'?'部分':'未实现'}</span></td></tr>`).join('')}
+    </tbody></table></div>
+
+  <h2 class="sec">怎么读这张表</h2>
+  <div class="card">
+    <div class="kv"><span>骨架已通</span><b>能跑通"跨设备训一个模型"的闭环</b></div>
+    <div class="kv"><span>缺的是"契约层"</span><b>份额、归一化、可验账本 —— 这些决定"公平与可信"</b></div>
+    <div class="kv"><span>为什么先缺着</span><b>用户已明确：第一阶段是"自己用自己的设备"，威胁模型不成立</b></div>
+    <div class="note">所以本 demo 里的"多角色 / 陌生人 / 悬赏"是<b>设计目标</b>；
+    而"指纹 / 帧格式 / 探测 / 复算 / 掉线不阻塞"是<b>今天就能跑的</b>。</div>
+  </div>
+  <div class="anchor">对照来源：<b>design/02 不变量 INV-1~26</b>、<b>09 联邦协议</b>、<b>11 公地</b>、<b>16 规范族</b>；
+    代码事实由两个子 agent 逐条核对 <b>src/fed/*</b>（含"未实现/无法判定"的诚实标注）。</div>`;
+
+/* ---------- gate ---------- */
+function gate(){
+  return `<div class="card pad0"><div style="padding:26px;text-align:center">
+    <div style="font-size:14px;font-weight:500">还没有房间</div>
+    <div class="note" style="margin-top:6px">先走一遍创建向导，或者直接看看分支树。</div>
+    <div class="actions" style="justify-content:center;margin-top:14px">
+      <button class="btn" data-go="create">去创建房间</button>
+      <button class="btn ghost" data-go="base">先看分支树</button>
+    </div></div></div>`;
+}
+
+/* ---------- 通用交互 ---------- */
+let tt;
+function toast(h){const t=document.getElementById('toast');t.innerHTML=h;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),3800);}
+document.addEventListener('click',e=>{
+  const g=e.target.closest('[data-go]'); if(g){go(g.dataset.go);return;}
+  const j=e.target.closest('[data-join]'); if(j){JOINED=true;render();toast('已加入。你的角色是<b>评估节点</b> —— 系统按你的设备能力自动定的。');return;}
+  const gu=e.target.closest('[data-guest]'); if(gu){toast('你以<b>观察者（游客）</b>身份加入：能看曲线/账本/血缘，不出算力，随时可转参与者。');return;}
+  const t=e.target.closest('[data-t]'); if(t){toast(t.dataset.t);return;}
+  const b=e.target.closest('#baseSel'); if(b){return;}
+  const bn=e.target.closest('[data-b]'); if(bn){
+    const map={'b0':'base-0.5b@0.62','b1':'zh-lora-v2@0.71','b2':'粤语-v1@0.69','b3':'闽南语 v3@0.78','b4':'医疗问答-v1@0.74','b5':'主干 main'};
+    S.base=map[bn.dataset.b]; [...document.querySelectorAll('.tn')].forEach(x=>x.classList.toggle('sel',x===bn));
+    const s=document.getElementById('baseSel'); if(s) s.textContent=S.base;
+    toast('起点已改为 <b>'+S.base+'</b>（会被锁进新房间的清单）。');return;
+  }
+});
+document.getElementById('mNov').addEventListener('click',()=>{S.mode='novice';document.body.className='novice';document.getElementById('modeName').textContent='小白 · 照房主设置';toast('小白档：只剩"加入/只看看"，参数全部照房主设置。');});
+document.getElementById('mPro').addEventListener('click',()=>{S.mode='pro';document.body.className='pro';document.getElementById('modeName').textContent='专业 · 全旋钮';toast('专业档：露出全部本地旋钮；房主锁定项仍只读。');});
+
+/* ---------- 启动 ---------- */
+(async()=>{
+  render();
+  S.cap=await probe();
+  if((location.hash||'').replace('#/','')==='probe') render();
+})();
+</script>
+</body>
+</html>
