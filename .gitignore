@@ -36,3 +36,6 @@ Thumbs.db
 
 # ������԰������ļ� demo��`npm run build:standalone` �������ɣ�������⣩
 demo/
+
+# multi-remote sync logs (scripts/sync-remotes.mjs)
+.sync/
