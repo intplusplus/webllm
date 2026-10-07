@@ -11,10 +11,18 @@ webllm：浏览器内自研 LLM 引擎（WebGPU + WGSL，TypeScript + Vite），
 tiny-GPT 训练闭环与 Qwen2.5-0.5B int4 推理；第二条线是**公共训练网络**：
 PC 与手机同一 WiFi 下打开网页即可联邦训练同一个模型（P2P、数据不出本地）。
 
+> 目录职责：`design/` 是**权威设计稿**（v3.1 目标态，先读 `design/README.md`）；
+> `docs/` 存**现状与记录**（架构总览/实测/bug/联调/设计评审记录）。
+> 二者冲突时 design 定义目标，docs 描述现状。
+
 ## 仓库地图
 
 ```
 pages/           页面入口：index(单机训练台) / fed(着陆) / host(房主) / join(节点) / webgpu-check(探测)
+design/          权威设计稿 v3.1（目标态）：01 愿景 / 02 架构总纲 / 03 IR / 04 语言AI面 /
+                 05 算子内核 / 06 执行引擎 / 07 学习策略 + 07b 算法目录 / 08 家族压测 /
+                 09 联邦协议 / 10 去中心安全 / 11 数据与模型公地 / 12 路线图 / 13 风险开放问题 /
+                 14 训练工程现实回应（先读 design/README.md）
 src/app/         入口装配：main / fed-main / selftest
 src/gpu/         WebGPU 引擎：device/arena/buffer/pipeline + kernels/{gemm,norm,attention,rope,activation,embedding,misc}/（35 个 WGSL）
 src/model/       模型图：tiny-gpt / qwen（前反向 + 绑定）
@@ -85,6 +93,8 @@ node scripts/verify-phone.mjs gpu|refresh|kill   # 单场景
 | 想… | 读 |
 |---|---|
 | 快速建立全局理解 | docs/架构总览.md（分层/调用链/不变量/测试体系/债务清单） |
+| 目标态设计（v3.1 要变成什么） | design/README.md（权威设计稿索引） |
+| 设计为什么这么定 / 历史评审推导 | docs/设计评审记录-2026-10-07.md、docs/设计评审记录-2026-10-07-第二轮.md |
 | 真机联调 / 手机 WebGPU | docs/真机联调指南.md |
 | 查历史 bug 与教训 | docs/bug记录.md |
 | 多设备共同训练的选型 | docs/共同训练方式选型.md |
