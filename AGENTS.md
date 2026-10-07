@@ -32,7 +32,9 @@ src/infer/       生成循环 / sampler
 src/weights/     safetensors / GPTQ int4 反量化 / qwen-loader
 src/reference/   CPU 参考实现（GPU 对拍基准）
 src/fed/         公共训练网络：protocol / engine(+gpu-engine) / node(编排) / transport / bus / corpus / capability
-src/tests/       页面自检注册表（kernels+model = 44 项）+ {ops,train,infer,qwen,perf}/ 分组 + fed/(无头与端到端)
+src/ir/          Spec IR（P0/P1/P2 已落地）：types/op/ops/expr/canonical/hash/migrate +
+                 infer(静态类型与诊断) / jsx(双向投影) / plan+emit(编译层，自动 passBreak)
+src/tests/       页面自检注册表（kernels+model = 44 项）+ {ops,train,infer,qwen,perf}/ 分组 + fed/(无头与端到端) + ir/(Spec IR 验收)
 scripts/         自检与工具：verify-*.mjs / signal-server / start-demo / build-standalone / lib/{cdp,bundle,cert}
 docs/            权威文档（先读 docs/架构总览.md）
 ```
@@ -43,6 +45,8 @@ docs/            权威文档（先读 docs/架构总览.md）
 npm run dev / demo / demo:https     # dev server / 一键联邦 demo（信令+dev server）/ 自签 https
 npm run typecheck / build           # 静态检查 / 四页构建
 npm run verify:fed                  # 联邦核心自检（Node 无头，19 项）
+npm run verify:ir                   # Spec IR 自检（Node 无头，33 项：IR-V1~V5/OP-V3·V4/ENG-V2~V4·V12）
+node scripts/verify-ir.mjs --log <file>   # 同上，并把结果按 UTF-8 落盘（Windows 控制台中文会乱码）
 npm run verify:e2e                  # 三节点端到端（20 项，含抓作弊节点）
 npm run verify:signal               # 信令协议（9 项，含裸 socket 心跳回归）
 npm run verify:ui                   # 真实 Chromium 界面测试（20 项）
@@ -55,6 +59,7 @@ node scripts/verify-phone.mjs gpu|refresh|kill   # 单场景
 | 改动范围 | 必跑 |
 |---|---|
 | 任何 `src/**` | `npm run typecheck` + `npm run build` |
+| `src/ir/**` | 再加 `npm run verify:ir` |
 | `src/fed/**` | 再加 `verify:fed`、`verify:e2e`、`verify:ui` |
 | 信令/传输层 | 再加 `verify:signal` |
 | 手机端行为 / 用户要求联调 | 再加 `npm run verify:phone` |
