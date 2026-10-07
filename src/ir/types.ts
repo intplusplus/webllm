@@ -72,7 +72,10 @@ export type Expr =
   | { kind: 'range'; from: Expr; to: Expr; step?: Expr }
   | { kind: 'cond'; test: Expr; then: Expr; else: Expr };
 
-export type PropValue = number | string | boolean | null | PropValue[] | Expr;
+/** 结构化的嵌套 prop（如 `bind: { w: 'layers.0.wq.w' }`）。只允许纯数据。 */
+export interface PropObject { [ key: string ]: PropValue }
+
+export type PropValue = number | string | boolean | null | PropValue[] | PropObject | Expr;
 export type Props = Record<string, PropValue>;
 
 export function isExpr ( v: unknown ): v is Expr

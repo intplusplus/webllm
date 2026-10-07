@@ -78,7 +78,7 @@ function defs (): OpDefinition[]
       dim: { type: 'int', required: true },
     },
     io: {
-      in: [ { name: 'ids', shape: [ 'B', 'T' ], dtype: 'i32' } ],
+      in: [ { name: 'ids', shape: [ 'B', 'T' ], dtype: 'i32' }, { name: 'weight' } ],
       out: [ { name: 'out', shape: [ 'B', 'T', 'dim' ] } ],
     },
     caps: A_FWD_VJP, phase: [ ...P_ALL ], pure: true,
@@ -98,6 +98,8 @@ function defs (): OpDefinition[]
       transposeA: { type: 'bool', default: false },
       transposeB: { type: 'bool', default: false },
       hasBias: { type: 'bool', default: false },
+      /** 输出特征数；权重经 props.bind 绑定时 infer 靠它推出形状。 */
+      n: { type: 'int' },
     },
     io: {
       in: [ { name: 'a' }, { name: 'b' }, { name: 'bias', optional: true } ],
@@ -109,18 +111,17 @@ function defs (): OpDefinition[]
     impl: { kind: 'kernel', entry: 'kernels/gemm/gemm_nt.wgsl' },
   }, ( ins, ctx ) =>
   {
-    const a = asTensor( ins.a )?.shape ?? [ 'M', 'K' ];
-    const b = asTensor( ins.b )?.shape ?? [ 'K', 'N' ];
-    const tA = propBool( ctx.props, 'transposeA', { symbols: ctx.symbols } );
+    const a = asTensor( ins.a )?.shape ?? [ 'B', 'T', 'K' ];
+    const b = asTensor( ins.b )?.shape;
     const tB = propBool( ctx.props, 'transposeB', { symbols: ctx.symbols } );
-    const mDim = tA ? a[ 1 ] : a[ 0 ];
-    const kA = tA ? a[ 0 ] : a[ a.length - 1 ];
-    const kB = tB ? b[ b.length - 1 ] : b[ 0 ];
-    const nDim = tB ? b[ 0 ] : b[ b.length - 1 ];
-    // 记下 K 不一致的线索：交由 infer 的 SHAPE_MISMATCH 判定（这里只产候选）。
-    void kA; void kB;
-    return { out: tensor( [ mDim, nDim ] ) };
-  }, '通用矩阵乘（NT/NN/TN 三个 kernel 共享契约）' ) );
+    // 输出特征数：优先 `props.n`（权重经 props.bind 绑定时 infer 看不到它的形状），
+    // 否则退回第二个操作数的形状。输出形状 = A 的前缀 + [n]，保持秩不变。
+    const nFromB: Dim | undefined = b ? ( tB ? b[ 0 ] : b[ b.length - 1 ] ) : undefined;
+    const nDim = dimProp( ctx, 'n', nFromB ?? 'N' );
+    const out = a.slice();
+    out[ out.length - 1 ] = sym( ctx, nDim );
+    return { out: tensor( out ) };
+  }, '通用矩阵乘（NT/NN/TN 三个 kernel 共享契约；输出形状 = A 前缀 + props.n）' ) );
 
   add( builtin( {
     op: 'RMSNorm', version: '1.0',
@@ -301,6 +302,37 @@ function defs (): OpDefinition[]
     impl: { kind: 'kernel', entry: 'kernels/norm/rmsnorm.wgsl' },
   }, ( ins ) => ( { qOut: asTensor( ins.q ) ?? tensor( [ 'B', 'H', 'T', 'd' ] ), kOut: asTensor( ins.k ) ?? tensor( [ 'B', 'H', 'T', 'd' ] ) } ),
     'QK-Norm：抑制注意力 logits 爆炸（05 §5.3，Marin 32B 实证）' ) );
+
+  add( builtin( {
+    op: 'RoPE', version: '1.0',
+    props: {
+      heads: { type: 'int', required: true },
+      headDim: { type: 'int', required: true },
+      base: { type: 'float', default: 10000 },
+      seqLen: { type: 'int', default: 0 },
+    },
+    io: { in: [ { name: 'x', shape: [ 'B', 'T', 'H', 'D'] } ], out: [ { name: 'out' } ] },
+    caps: A_FWD_VJP, phase: [ ...P_ALL ], pure: true,
+    cost: { flops: 'O(B*T*H*D)', mem: 'O(B*T*H*D)' },
+    writesReads: { writes: [ 'act' ] },
+    impl: { kind: 'kernel', entry: 'kernels/rope/rope.wgsl' },
+  }, sameShape, '旋转位置编码（GPT-NeoX 相邻成对；rope/rope_half 两个 kernel 共享契约）' ) );
+
+  add( builtin( {
+    op: 'Attention', version: '1.0',
+    props: {
+      heads: { type: 'int', required: true },
+      headDim: { type: 'int', required: true },
+      causal: { type: 'bool', default: true },
+      scale: { type: 'float', default: 0 },
+    },
+    io: { in: [ { name: 'q' }, { name: 'k' }, { name: 'v' } ], out: [ { name: 'out' } ] },
+    caps: A_FWD_VJP, phase: [ ...P_ALL ], pure: true,
+    cost: { flops: '4*B*H*T*T*D', mem: 'O(B*H*T*T)' },
+    writesReads: { reads: [ 'act' ], writes: [ 'act' ] },
+    impl: { kind: 'kernel', entry: 'kernels/attention/attention.wgsl' },
+  }, ( ins ) => ( { out: asTensor( ins.q ) ?? tensor( [ 'B', 'T', 'H', 'D' ] ) } ),
+    '因果自注意力（q/k/v 形状 [B*T, H, D]；attention/attention_gqa 共享契约）' ) );
 
   add( builtin( {
     op: 'ZLoss', version: '1.0',

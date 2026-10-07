@@ -13,13 +13,21 @@ import {
   migrate,
   plan,
   emit,
+  run,
   specHash,
   buildModel,
   toJsx,
   renderJsx,
   parseJsx,
   h,
+  builtinCpuImpls,
+  buildGptIr,
+  bindBatch,
 } from '../../ir/index';
+import { DEFAULT_CONFIG } from '../../model/config';
+import { initWeights } from '../../model/init';
+import { gptForwardRef } from '../../reference/gpt-ref';
+import { checkTolerance } from '../../reference/cpu-ref';
 import type {
   BackendCapability,
   ClusterCapability,
@@ -556,6 +564,90 @@ export async function runIrSelfCheck (): Promise<IrTestResult[]>
     const ok = p.diags.some( ( d ) => d.code === 'BYZANTINE_BUDGET_INFEASIBLE' && d.level === 'warn' );
     push( 'BYZANTINE_BUDGET_INFEASIBLE · f/n 不可行（ADR-029）', ok,
       `κ*=${ p.trust.expectedBias } minRoom=${ p.trust.minRoomSize } diags=${ p.diags.map( ( d ) => d.code ).join( ',' ) || '(无)' }` );
+  }
+
+  // ===================== run()：IR 编译产物真的跑出数值 =====================
+
+  {
+    const cfg = DEFAULT_CONFIG;
+    const w = initWeights( cfg, 1234 );
+    const gpt = buildGptIr( cfg, w );
+    const B = 2;
+    const T = 8;
+    const rnd = mulberry32( 7 );
+    const tokens = new Uint32Array( B * T );
+    for ( let i = 0; i < tokens.length; i++ ) tokens[ i ] = Math.floor( rnd() * cfg.vocabSize );
+
+    const ir = infer( gpt.model, { symbols: { B, T } } );
+    const errs = ir.diags.filter( ( d ) => d.level === 'error' );
+    const artifact = emit( gpt.model, ir, plan( gpt.model, ir, { backends: [ cpuBackend() ] } ) );
+    const binding = bindBatch( gpt, tokens, B, T );
+    const impls = builtinCpuImpls();
+    const res = run( gpt.model, ir, artifact, binding, impls );
+    const ref = gptForwardRef( w, cfg, { tokens, B, T } );
+    const tol = checkTolerance( res.rootOutput.data as Float32Array, ref.logits, 1e-4, 1e-4 );
+
+    push( 'RUN-V0 · tiny-GPT 的 IR 模型 infer 零 error',
+      errs.length === 0,
+      errs.length === 0
+        ? `${ Object.keys( gpt.model.nodes ).length } 节点 / 拓扑序 ${ ir.graph.order.length } / pass ${ artifact.passes.length } / 插 break ${ artifact.passBreaks } 次`
+        : `error 码=${ errs.map( ( d ) => d.code ).join( ',' ) }` );
+
+    push( 'RUN-V1 · IR 前向 logits 与手写实现逐元素对拍一致', tol.ok,
+      `maxAbs=${ tol.maxAbs.toExponential( 2 ) } maxRel=${ tol.maxRel.toExponential( 2 ) } 元素=${ ref.logits.length }` );
+
+    // 编译一次、多步复用（ENG-V1）：同一 artifact 再跑一次必须逐位相同。
+    const res2 = run( gpt.model, ir, artifact, binding, impls );
+    const same = ( () =>
+    {
+      const a = res.rootOutput.data as Float32Array;
+      const b = res2.rootOutput.data as Float32Array;
+      if ( a.length !== b.length ) return false;
+      for ( let i = 0; i < a.length; i++ ) if ( a[ i ] !== b[ i ] ) return false;
+      return true;
+    } )();
+    push( 'RUN-V2 · 同一 artifact 复用两次逐位一致（CompileOnce-Reuse）', same,
+      `复用后输出完全相同=${ same }（未重新 infer/plan/emit）` );
+
+    // 参数共享（tie）：lmHead.w 与 wte 必须是同一份数据。
+    const tied = gpt.tensors.get( 'lmHead.w' )?.data === gpt.tensors.get( 'wte' )?.data;
+    push( 'RUN-V3 · lmHead.w 与 wte 共享同一份张量（tie）', tied, `张量身份相同=${ tied }` );
+  }
+
+  // ===================== 架构与权重分离（design/15 §3.9 / 基线 B4） =====================
+
+  {
+    const cfg = DEFAULT_CONFIG;
+    const m1 = buildGptIr( cfg, initWeights( cfg, 1 ) ).model;
+    const m2 = buildGptIr( cfg, initWeights( cfg, 2 ) ).model;
+    const sameHash = specHash( m1 ) === specHash( m2 );
+    const cfg4 = { ...cfg, nLayer: cfg.nLayer + 1 };
+    const m3 = buildGptIr( cfg4, initWeights( cfg4, 1 ) ).model;
+    const archHash = specHash( m1 ) !== specHash( m3 );
+    push( 'ARCH/WEIGHTS · 换权重不改 specHash，改架构必改', sameHash && archHash,
+      `权重不同→同哈希=${ sameHash }；层数+1→哈希变=${ archHash }` );
+  }
+
+  // ===================== INV-12：受信逃生门 =====================
+
+  {
+    let rejected = false;
+    try
+    {
+      builtinRegistry.define( {
+        contract: {
+          op: 'EvilKernel', version: '0.0', props: {},
+          io: { in: [], out: [] },
+          caps: [ 'forward' ], phase: [ 'train' ], pure: true,
+        },
+        reviewId: '',
+        codeHash: 'abc',
+        referenceTests: [],
+      } );
+    }
+    catch { rejected = true; }
+    push( 'INV-12 · defineOp 拒绝未审阅贡献（无 reviewId / 无对拍）', rejected,
+      rejected ? '已按 INV-12 拒绝' : '竟然放行了' );
   }
 
   // ===================== 哈希算法自检（跨端一致性前提） =====================

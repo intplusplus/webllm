@@ -42,6 +42,30 @@ export {
   type ExecutionPlan,
 } from './plan';
 export { emit, type Artifact } from './emit';
+export {
+  run,
+  createImplRegistry,
+  bindMapOf,
+  type CpuRunContext,
+  type CpuOpImpl,
+  type CpuImplRegistry,
+  type RunBinding,
+  type RunResult,
+  type RunTrace,
+} from './exec';
+export {
+  tv,
+  f32,
+  u32,
+  numel,
+  createTensorTable,
+  requireTensor,
+  type TensorData,
+  type TensorValue,
+  type TensorTable,
+} from './binding';
+export { builtinCpuImpls } from './cpu-impls';
+export { buildGptIr, bindBatch, type GptIr } from './tinygpt-ir';
 
 import type { Model } from './types';
 import type { OpRegistry } from './op';
