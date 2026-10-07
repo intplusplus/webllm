@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>织造 · 交互原型 v0</title>
+<style>
+:root{
+  --bg:#131312; --panel:#1b1b19; --panel2:#232320; --panel3:#2b2b27;
+  --line:#34342f; --line2:#45453e;
+  --txt:#ededea; --mut:#a1a19a; --dim:#6f6f68;
+  --p:#afa9ec; --pbg:#2a2750; --pb:#7f77dd;
+  --t:#5dcaa5; --tbg:#0f3329;
+  --b:#85b7eb; --bbg:#10304c;
+  --a:#ef9f27; --abg:#3a2a0c;
+  --r:#e24b4a; --rbg:#3a1616;
+  --g:#97c459;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  font-size:13px; line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+.app{display:grid; grid-template-columns:208px 1fr 300px; height:100vh; overflow:hidden}
+
+/* ---------- rail ---------- */
+.rail{background:var(--panel); border-right:1px solid var(--line); padding:16px 12px; display:flex; flex-direction:column; gap:4px}
+.brand{display:flex; align-items:center; gap:8px; padding:4px 8px 16px}
+.brand .mark{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--pb),var(--t))}
+.brand b{font-size:14px;font-weight:500;letter-spacing:.5px}
+.brand span{font-size:11px;color:var(--dim);display:block;margin-top:-2px}
+.nav{display:flex; flex-direction:column; gap:2px}
+.nav button{
+  all:unset; cursor:pointer; padding:8px 10px; border-radius:8px; color:var(--mut);
+  display:flex; align-items:center; gap:9px; font-size:13px;
+}
+.nav button:hover{background:var(--panel2); color:var(--txt)}
+.nav button.on{background:var(--pbg); color:#e6e3ff}
+.nav .ico{width:15px;text-align:center;opacity:.85}
+.rail .foot{margin-top:auto; padding:10px 10px 2px; border-top:1px solid var(--line)}
+.rail .foot .l1{font-size:11px;color:var(--dim)}
+.rail .foot .l2{font-size:12px;color:var(--mut);margin-top:2px}
+.dots{display:flex;gap:3px;margin-top:6px}
+.dots i{width:6px;height:6px;border-radius:50%;background:var(--line2);display:block}
+.dots i.on{background:var(--pb)}
+
+/* ---------- main ---------- */
+.main{display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.topbar{
+  display:flex; align-items:center; gap:12px; padding:12px 20px;
+  border-bottom:1px solid var(--line); background:var(--panel); flex:0 0 auto;
+}
+.topbar h1{font-size:15px;font-weight:500;margin:0}
+.topbar .sub{font-size:11px;color:var(--dim)}
+.spacer{flex:1}
+.chip{
+  font-size:11px; padding:3px 9px; border-radius:999px; border:1px solid var(--line2);
+  color:var(--mut); white-space:nowrap;
+}
+.chip.l0{background:var(--pbg);border-color:#4a4582;color:#cfcaff}
+.chip.l1{background:var(--tbg);border-color:#1e6b53;color:#a7efd4}
+.chip.l2{background:var(--abg);border-color:#7a5514;color:#f6cf8c}
+.chip.l3{background:var(--rbg);border-color:#7a2b2b;color:#f3aeae}
+button.btn{
+  all:unset;cursor:pointer;font-size:12px;padding:6px 12px;border-radius:8px;
+  background:var(--pbg); color:#ded9ff; border:1px solid #4a4582; white-space:nowrap;
+}
+button.btn:hover{background:#34306a}
+button.btn.ghost{background:transparent;color:var(--mut);border-color:var(--line2)}
+button.btn.ghost:hover{color:var(--txt);background:var(--panel2)}
+button.btn.sm{font-size:11px;padding:4px 9px}
+.scroll{overflow:auto;padding:20px;flex:1 1 auto}
+.view{display:none}
+.view.on{display:block}
+h2.sec{font-size:12px;font-weight:500;color:var(--dim);letter-spacing:.6px;margin:0 0 10px}
+h2.sec:not(:first-child){margin-top:26px}
+.note{font-size:11px;color:var(--dim);margin-top:8px}
+
+/* ---------- cards ---------- */
+.row{display:grid;gap:12px}
+.row.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.row.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{
+  background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px;
+}
+.card.pad0{padding:0;overflow:hidden}
+.cardhead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.cardhead .t{font-weight:500}
+.cardhead .h{font-size:10.5px;color:var(--dim);font-family:ui-monospace,Menlo,Consolas,monospace}
+.kv{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0;color:var(--mut)}
+.kv b{color:var(--txt);font-weight:400}
+.tag{font-size:10.5px;padding:2px 7px;border-radius:6px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+.tag.p{background:var(--pbg);color:#cfcaff;border-color:#4a4582}
+.tag.t{background:var(--tbg);color:#a7efd4;border-color:#1e6b53}
+.tag.b{background:var(--bbg);color:#bfdcf7;border-color:#245b8a}
+.tag.a{background:var(--abg);color:#f6cf8c;border-color:#7a5514}
+
+/* device */
+.dev{display:flex;align-items:center;gap:10px}
+.led{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+.led.on{background:var(--t)} .led.idle{background:var(--dim)} .led.warn{background:var(--a)}
+.dev .nm{font-weight:500}
+.dev .rl{font-size:11px;color:var(--dim)}
+
+/* object grid */
+.objs{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:10px}
+.obj{
+  background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:11px 12px; cursor:pointer;
+}
+.obj:hover{border-color:var(--line2); background:var(--panel2)}
+.obj .ty{font-size:10.5px;color:var(--dim);display:flex;justify-content:space-between;align-items:center;gap:6px}
+.obj .nm{font-weight:500;margin:5px 0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.obj .hh{font-size:10px;color:var(--dim);font-family:ui-monospace,Menlo,Consolas,monospace}
+.obj .mt{font-size:11px;color:var(--mut);margin-top:6px}
+
+/* room */
+.room{display:grid;grid-template-columns:1fr 260px;gap:0}
+.room .lft{padding:16px}
+.room .rgt{padding:16px;border-left:1px solid var(--line);background:var(--panel2)}
+.curve{width:100%;height:120px;display:block}
+.memrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+.memrow:last-child{border-bottom:0}
+.memrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* feed */
+.feed{display:flex;flex-direction:column;gap:10px}
+.feeditem{display:flex;gap:12px;align-items:flex-start}
+.feeditem .lft{flex:1;min-width:0}
+.feeditem .nm{font-weight:500}
+.feeditem .meta{font-size:11px;color:var(--dim);margin-top:3px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+
+/* proposal */
+.prop{display:flex;gap:12px;align-items:center;padding:12px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:10px}
+.verdict{font-size:11px;padding:2px 8px;border-radius:6px}
+.verdict.ok{background:var(--tbg);color:#a7efd4}
+.verdict.wait{background:var(--abg);color:#f6cf8c}
+.verdict.no{background:var(--rbg);color:#f3aeae}
+
+/* table */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--dim);font-weight:400;font-size:11px}
+td.num,th.num{text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace}
+tr.clk{cursor:pointer} tr.clk:hover{background:var(--panel2)}
+.merkle{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--t);word-break:break-all}
+
+/* graph */
+.graphwrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px}
+svg.graph{width:100%;height:auto;display:block}
+.gnode{cursor:pointer}
+.gnode rect{transition:stroke .12s}
+.gnode:hover rect{stroke:var(--p)}
+.gnode.dim{opacity:.28}
+.gnode text{font-size:11px;fill:var(--txt)}
+.gnode .sub{font-size:9.5px;fill:var(--dim)}
+.gedge{stroke:var(--line2);stroke-width:1;fill:none}
+.gedge.hi{stroke:var(--pb);stroke-width:1.6}
+.gelabel{font-size:9.5px;fill:var(--dim)}
+
+/* agent */
+.agent{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.agent .hd{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.agent .hd b{font-weight:500}
+.agent .hd .st{font-size:10.5px;color:var(--t)}
+.agent .body{padding:14px;overflow:auto;flex:1 1 auto}
+.agent .msg{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--mut)}
+.agent pre{
+  background:#0f0f0e;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;line-height:1.65;color:#c8e6d5;
+  white-space:pre-wrap;word-break:break-word;margin:10px 0 0;
+}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.chips button{
+  all:unset;cursor:pointer;font-size:11px;padding:5px 9px;border-radius:8px;
+  border:1px solid var(--line2);color:var(--mut);
+}
+.chips button:hover{color:var(--txt);background:var(--panel2);border-color:var(--pb)}
+.agent .ft{padding:12px 14px;border-top:1px solid var(--line)}
+
+/* drawer */
+.drawer{
+  position:fixed;top:0;right:0;height:100vh;width:392px;max-width:88vw;background:var(--panel);
+  border-left:1px solid var(--line2);transform:translateX(102%);transition:transform .22s ease;
+  display:flex;flex-direction:column;z-index:40;box-shadow:-24px 0 60px rgba(0,0,0,.45);
+}
+.drawer.on{transform:translateX(0)}
+.drawer .hd{padding:16px 18px;border-bottom:1px solid var(--line)}
+.drawer .hd .nm{font-size:15px;font-weight:500;margin:6px 0 2px}
+.drawer .hd .hh{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;color:var(--dim)}
+.drawer .bd{padding:18px;overflow:auto;flex:1 1 auto}
+.blk{margin-bottom:18px}
+.blk .lb{font-size:11px;color:var(--dim);letter-spacing:.5px;margin-bottom:7px}
+.bar{height:6px;background:var(--panel3);border-radius:3px;overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;background:var(--pb)}
+.chain{font-size:11.5px;color:var(--mut);font-family:ui-monospace,Menlo,Consolas,monospace}
+.chain span{color:var(--txt)}
+
+/* toast */
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translate(-50%,140%);
+  background:var(--panel3);border:1px solid var(--line2);border-radius:10px;
+  padding:10px 16px;font-size:12px;z-index:60;transition:transform .24s ease;max-width:70vw;
+}
+.toast.on{transform:translate(-50%,0)}
+.toast b{color:var(--p)}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="rail">
+    <div class="brand">
+      <div class="mark"></div>
+      <div><b>织造</b><span>原型 v0 · 参考实现之一</span></div>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-v="studio" class="on"><span class="ico">◱</span>工作台</button>
+      <button data-v="team"><span class="ico">◫</span>我的团队</button>
+      <button data-v="commons"><span class="ico">◎</span>大家的公地</button>
+      <button data-v="graph"><span class="ico">⋈</span>血缘图</button>
+      <button data-v="ledger"><span class="ico">▤</span>账本</button>
+    </nav>
+    <div class="foot">
+      <div class="l1">一致性档位</div>
+      <div class="l2" id="profileName">Solo 档</div>
+      <div class="dots"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+      <div class="l1" style="margin-top:8px">本地优先 · 网络可选</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1 id="title">工作台</h1>
+        <div class="sub" id="subtitle">我的设备 · 我的仓库 · 我的房间</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="chip l0" id="trust">🟢 自家 · L0</span>
+      <button class="btn ghost sm" id="upgradeBtn">升格 →</button>
+      <button class="btn sm" id="newBtn">+ 新建训练</button>
+    </div>
+
+    <div class="scroll">
+      <!-- ============ STUDIO ============ -->
+      <section class="view on" id="v-studio">
+        <h2 class="sec">我的设备（自动分工 · 降级阶梯）</h2>
+        <div class="row c3">
+          <div class="card">
+            <div class="dev"><span class="led on"></span><div><div class="nm">台式机</div><div class="rl">反传 · full backprop</div></div></div>
+            <div class="kv"><span>状态</span><b>训练中</b></div>
+            <div class="kv"><span>本轮步数</span><b>120</b></div>
+          </div>
+          <div class="card">
+            <div class="dev"><span class="led on"></span><div><div class="nm">公司笔记本</div><div class="rl">LoRA 增量</div></div></div>
+            <div class="kv"><span>状态</span><b>训练中</b></div>
+            <div class="kv"><span>本轮步数</span><b>48</b></div>
+          </div>
+          <div class="card">
+            <div class="dev"><span class="led warn"></span><div><div class="nm">手机（华为平板）</div><div class="rl">仅评估 · evaluator-only</div></div></div>
+            <div class="kv"><span>状态</span><b>切后台，下轮自动回</b></div>
+            <div class="kv"><span>本轮步数</span><b>—</b></div>
+          </div>
+        </div>
+        <div class="note">最慢的设备不阻塞别人；算不动的设备换角色，而不是被踢出。</div>
+
+        <h2 class="sec">我的房间 · room-a（正在训练）</h2>
+        <div class="card pad0">
+          <div class="room">
+            <div class="lft">
+              <div class="cardhead">
+                <span class="t">闽南语-小模型 · 第 7 轮</span>
+                <span class="h">recipe 8f3a19c2</span>
+                <span class="tag">弹性成员</span>
+              </div>
+              <svg class="curve" viewBox="0 0 520 120" preserveAspectRatio="none">
+                <line x1="0" y1="30" x2="520" y2="30" stroke="#25251f" stroke-width="1"/>
+                <line x1="0" y1="70" x2="520" y2="70" stroke="#25251f" stroke-width="1"/>
+                <line x1="0" y1="110" x2="520" y2="110" stroke="#25251f" stroke-width="1"/>
+                <polyline id="curve1" fill="none" stroke="#7f77dd" stroke-width="2"
+                  points="0,14 40,26 80,40 120,50 160,58 200,66 240,72 280,78 320,82 360,86 400,89 440,92 480,94 520,96"/>
+                <polyline id="curve2" fill="none" stroke="#5dcaa5" stroke-width="1.4" stroke-dasharray="4 4"
+                  points="0,14 40,22 80,34 120,44 160,54 200,62 240,70 280,76 320,80 360,84 400,87 440,90 480,92 520,93"/>
+                <text x="6" y="10" font-size="9" fill="#6f6f68">loss</text>
+                <text x="486" y="110" font-size="9" fill="#6f6f68">7 轮</text>
+              </svg>
+              <div class="note" style="display:flex;gap:14px">
+                <span style="color:#7f77dd">━ 联邦（我这三台）</span>
+                <span style="color:#5dcaa5">┅ 单机独训基线</span>
+                <span>联邦更优 —— 这正是"散设备拼成一块显卡"的证据</span>
+              </div>
+            </div>
+            <div class="rgt">
+              <div class="cardhead"><span class="t" style="font-size:12px">成员（3）</span></div>
+              <div class="memrow"><span class="led on"></span><span class="nm">台式机 · 房主</span><span class="tag p">反传</span></div>
+              <div class="memrow"><span class="led on"></span><span class="nm">公司笔记本</span><span class="tag b">LoRA</span></div>
+              <div class="memrow"><span class="led warn"></span><span class="nm">手机</span><span class="tag">评估</span></div>
+              <div class="kv" style="margin-top:10px"><span>本轮通信</span><b>约 62 KB</b></div>
+              <div class="kv"><span>账本</span><b>已留痕 7 轮</b></div>
+            </div>
+          </div>
+        </div>
+
+        <h2 class="sec">我的仓库（点开看对象卡）</h2>
+        <div class="objs" id="objGrid-studio"></div>
+      </section>
+
+      <!-- ============ TEAM ============ -->
+      <section class="view" id="v-team">
+        <h2 class="sec">团队空间 · 数据不出内网</h2>
+        <div class="row c3">
+          <div class="card">
+            <div class="kv"><span>成员</span><b>3 人 + 2 台内网服务器</b></div>
+            <div class="kv"><span>共享仓库</span><b>4 个</b></div>
+            <div class="kv"><span>私有 registry</span><b>启用</b></div>
+            <div class="kv"><span>自建信令</span><b>启用</b></div>
+          </div>
+          <div class="card" style="grid-column:span 2">
+            <div class="cardhead"><span class="t">主干模型</span><span class="h">base-legal-0.5b</span><span class="tag t">团队私密</span></div>
+            <div class="kv"><span>数据</span><b>3 份本地数据集（只登记指纹，原文不出机器）</b></div>
+            <div class="kv"><span>当前版本</span><b>v4 · 3 位成员贡献</b></div>
+            <div class="actions" style="margin-top:10px">
+              <button class="btn sm">fork 出我的分支</button>
+              <button class="btn ghost sm">看血缘</button>
+            </div>
+          </div>
+        </div>
+
+        <h2 class="sec">待评审提议（Proposal = PR 的等价物）</h2>
+        <div class="card">
+          <div class="prop">
+            <div style="flex:1">
+              <div><b style="font-weight:500">@小李 提议：并入 12k 条医疗问答</b></div>
+              <div class="meta" style="font-size:11px;color:var(--dim);margin-top:3px">
+                改动 = 一个数据补丁 · 附 TrainingTrace + ProbeResult · 配对 CRN 已跑
+              </div>
+            </div>
+            <span class="verdict ok">机器闸门 ✓ 通过</span>
+            <span class="verdict wait">人审 待定</span>
+            <div class="actions">
+              <button class="btn sm">合并</button>
+              <button class="btn ghost sm" id="forkOnly">fork-only</button>
+            </div>
+          </div>
+          <div class="note">
+            闸门不是"打分"——是能力原子的配对差分（含置信区间）。合并默认用最简单的 Task Arithmetic。
+          </div>
+        </div>
+
+        <h2 class="sec">团队仓库</h2>
+        <div class="objs" id="objGrid-team"></div>
+      </section>
+
+      <!-- ============ COMMONS ============ -->
+      <section class="view" id="v-commons">
+        <h2 class="sec">正在训练（开放房间）</h2>
+        <div class="feed" id="roomFeed"></div>
+
+        <h2 class="sec">一个公开任务 · 验收即探针</h2>
+        <div class="card" id="taskCard"></div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn sm">fork 这份配方</button>
+          <button class="btn ghost sm">贴一个数据补丁</button>
+          <button class="btn ghost sm">发一个提议</button>
+        </div>
+
+        <h2 class="sec">公地资产</h2>
+        <div class="objs" id="objGrid-commons"></div>
+      </section>
+
+      <!-- ============ GRAPH ============ -->
+      <section class="view" id="v-graph">
+        <h2 class="sec">血缘图 · 从数据到能力，一条链上全可查</h2>
+        <div class="graphwrap">
+          <svg class="graph" viewBox="0 0 900 330" id="graphSvg"></svg>
+        </div>
+        <div class="note">这根线就是 Git 的 <code>git log --graph</code>：fork / merge / train / validate 都是可寻址的边。点节点看对象卡。</div>
+      </section>
+
+      <!-- ============ LEDGER ============ -->
+      <section class="view" id="v-ledger">
+        <h2 class="sec">我的贡献 · room-a</h2>
+        <div class="card pad0">
+          <table>
+            <thead><tr>
+              <th>节点</th><th>角色</th><th class="num">有效份额</th><th class="num">探索增益 φ</th><th class="num">积分</th>
+            </tr></thead>
+            <tbody id="ledgerBody"></tbody>
+          </table>
+        </div>
+        <div class="note">
+          "有效份额"= 按实际数据量×步数推导（不是自报）；φ 是探针增益的一阶可复算估计，带区间。
+        </div>
+
+        <h2 class="sec">追加日志锚点（不可静默改写）</h2>
+        <div class="card">
+          <div class="kv"><span>本轮 Merkle 根</span></div>
+          <div class="merkle">9f2c71ab…4e08d3  ·  由房主签名后广播</div>
+          <div class="note">任何人可独立校验：篡改任一历史条目 ⇒ 根校验失败。这就是"commit log"。</div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <aside class="agent">
+    <div class="hd">
+      <div class="mark" style="width:18px;height:18px;border-radius:5px;background:linear-gradient(135deg,#7f77dd,#5dcaa5)"></div>
+      <div><b>Agent</b> <span class="st">● 就绪</span></div>
+    </div>
+    <div class="body" id="agentBody">
+      <div class="msg">我能读 IR、能跑静态检查、能组装配方、能提提议。<br>选一个试试：</div>
+      <div class="chips" id="agentChips">
+        <button data-k="plan">给我配一个能在手机上跑的 30M 模型</button>
+        <button data-k="cost">这套配方通信量多少钱</button>
+        <button data-k="fix">infer 报错了，帮我修</button>
+      </div>
+    </div>
+    <div class="ft">
+      <div class="note" style="margin:0">人类做 L2 决策，Agent 做 L4 执行。它不自己 merge。</div>
+    </div>
+  </aside>
+</div>
+
+<!-- ============ drawer ============ -->
+<div class="drawer" id="drawer">
+  <div class="hd">
+    <div><span class="tag" id="dType">对象</span> <span class="chip" id="dTrust" style="margin-left:4px"></span></div>
+    <div class="nm" id="dName">—</div>
+    <div class="hh" id="dHash">—</div>
+  </div>
+  <div class="bd" id="dBody"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------------- data ---------------- */
+const OBJECTS = {
+  data1:{type:'数据集',name:'TinyShakespeare',hash:'d1a4…9c02',trust:'🟢 自家',parents:['—'],
+    size:'1.12 M 字符 · 1 分片表',metric:{k:'质量校验',v:.92,note:'去重+去污染已过'},
+    people:['我'],actions:['登记新版本','贴数据补丁','导出']},
+  diff1:{type:'数据补丁',name:'+ 医疗方言 12k',hash:'b77e…31af',trust:'🟡 公开',parents:['TinyShakespeare'],
+    size:'+12,480 条 · 分布 Δ 已登记',metric:{k:'许可可判',v:1,note:'ODRL 允许非商用研究'},
+    people:['@阿彬'],actions:['应用到我的本地数据','发提议','查看 ops']},
+  model1:{type:'模型',name:'闽南语-小模型 v3',hash:'8f3a…19c2',trust:'🟢 自家',parents:['base-0.5b','zh-lora-v2'],
+    size:'126 M 参数 · fp32',metric:{k:'探针综合',v:.78,note:'CI ±0.03 · 配对 CRN'},
+    people:['我','台式机','公司笔记本','手机'],actions:['继续训练','fork','发布到公地']},
+  adapter1:{type:'适配器',name:'med-lora（秩异构）',hash:'4c2d…7e10',trust:'🟡 公开',parents:['zh-lora-v2'],
+    size:'3.4 MB · rank 8→32 SVD 合成',metric:{k:'增益 φ',v:.61,note:'EMA 滑动窗口，非单轮定生死'},
+    people:['@阿彬','@小林'],actions:['挂载到我的模型','fork','对比 rank']},
+  recipe1:{type:'配方',name:'zh-lora-v2',hash:'8f3a·recipe',trust:'🟡 公开',parents:['base-0.5b'],
+    size:'基座 + 数据 + 策略 + 预算 + 评测',metric:{k:'可复现',v:1,note:'同配方 ⇒ 同模型'},
+    people:['@阿彬'],actions:['起一个房间','fork 配方','看评测套件']},
+  skill1:{type:'技能',name:'OOM 排查（手机端）',hash:'aa19…55c7',trust:'🟢 自家',parents:['—'],
+    size:'workflow · 5 步',metric:{k:'复用成功',v:.85,note:'新 agent 用它复现过一次'},
+    people:['我'],actions:['装进我的 Agent','fork']},
+  probe1:{type:'探针',name:'eval-suite-A',hash:'7bd0…2e44',trust:'🟡 公开',parents:['—'],
+    size:'18 类 / 183 项 能力原子',metric:{k:'统计功效',v:.9,note:'n 足够支撑最小可检测效应'},
+    people:['公地维护者'],actions:['用它验收','fork 一套私有的']},
+  task1:{type:'任务',name:'提升医疗方言问答',hash:'t9f1…0031',trust:'🟡 公开',parents:['recipe zh-lora-v2'],
+    size:'目标 + 验收探针 + 权责边界',metric:{k:'可自动验收',v:1,note:'acceptance.kind = probe'},
+    people:['发起人 @阿彬','执行者 17 节点','验收 probe-only'],actions:['接这个任务','看验收标准','看权责']}
+};
+
+const ROOMS=[
+  {n:'方言-闽南语 v3',by:'@阿彬',lv:2,nodes:17,round:42,recipe:'8f3a19c2',data:3,eta:'约 2h'},
+  {n:'小语种 OCR 后训练',by:'@mei',lv:2,nodes:9,round:11,recipe:'c02e77a1',data:5,eta:'约 5h'},
+  {n:'医疗问答（团队内）',by:'@小李',lv:1,nodes:5,round:8,recipe:'4b81d0fe',data:2,eta:'私密'}
+];
+
+const LEDGER=[
+  {n:'台式机（房主）',r:'反传',s:0.46,phi:'+0.021 ±0.004',c:182},
+  {n:'公司笔记本',r:'LoRA',s:0.31,phi:'+0.014 ±0.005',c:113},
+  {n:'手机（评估）',r:'仅评估',s:0.08,phi:'+0.003 ±0.006',c:24},
+  {n:'公地志愿者 #12',r:'前向',s:0.15,phi:'+0.007 ±0.005',c:41}
+];
+
+/* ---------------- nav ---------------- */
+const META={
+  studio:{t:'工作台',s:'我的设备 · 我的仓库 · 我的房间'},
+  team:{t:'我的团队',s:'共享仓库 · 权限 · 私有 registry'},
+  commons:{t:'大家的公地',s:'开放房间 · 任务 · 可 fork 的资产'},
+  graph:{t:'血缘图',s:'fork / merge / train / validate 全是可寻址的边'},
+  ledger:{t:'账本',s:'贡献可复算 · 可事后审计'}
+};
+document.getElementById('nav').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('on',x===b));
+  const v=b.dataset.v;
+  document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
+  document.getElementById('title').textContent=META[v].t;
+  document.getElementById('subtitle').textContent=META[v].s;
+});
+
+/* ---------------- objects ---------------- */
+function objCard(id,o){
+  return `<div class="obj" data-o="${id}">
+    <div class="ty"><span>${o.type}</span><span class="tag">${o.trust.slice(0,1)}</span></div>
+    <div class="nm">${o.name}</div>
+    <div class="hh">${o.hash}</div>
+    <div class="mt">${o.metric.k} ${o.metric.v>=1?'✓':(o.metric.v*100|0)+'%'}</div>
+  </div>`;
+}
+function fillGrid(el,keys){
+  el.innerHTML=keys.map(k=>objCard(k,OBJECTS[k])).join('');
+}
+fillGrid(document.getElementById('objGrid-studio'),['data1','model1','adapter1','recipe1','skill1','probe1']);
+fillGrid(document.getElementById('objGrid-team'),['data1','model1','recipe1','skill1']);
+fillGrid(document.getElementById('objGrid-commons'),['model1','adapter1','recipe1','probe1','task1','diff1']);
+
+document.addEventListener('click',e=>{
+  const o=e.target.closest('.obj'); if(!o) return;
+  openDrawer(o.dataset.o);
+});
+
+/* ---------------- drawer ---------------- */
+function openDrawer(id){
+  const o=OBJECTS[id]; if(!o) return;
+  document.getElementById('dType').textContent=o.type;
+  document.getElementById('dName').textContent=o.name;
+  document.getElementById('dHash').textContent='contentHash  '+o.hash;
+  const tr=document.getElementById('dTrust');
+  tr.textContent=o.trust; tr.className='chip '+(o.trust.includes('自家')?'l0':'l2');
+  document.getElementById('dBody').innerHTML=`
+    <div class="blk"><div class="lb">① 它是什么</div><div>${o.size}</div></div>
+    <div class="blk"><div class="lb">② 它从哪来（parents）</div>
+      <div class="chain">${o.parents.map(p=>'<span>'+p+'</span>').join('  ←  ')}</div>
+      <div class="note">溯源不可剥离：去掉父哈希，哈希就对不上，任何人都能检出。</div></div>
+    <div class="blk"><div class="lb">③ 它有多好</div>
+      <div>${o.metric.k} · ${(o.metric.v*100|0)}%</div>
+      <div class="bar"><i style="width:${o.metric.v*100}%"></i></div>
+      <div class="note">${o.metric.note}</div></div>
+    <div class="blk"><div class="lb">④ 谁在参与</div>
+      <div>${o.people.join(' · ')}</div>
+      <div class="note">pin 也是可计量的贡献（谁在存）。</div></div>
+    <div class="blk"><div class="lb">⑤ 能做什么</div>
+      <div class="actions">${o.actions.map(a=>'<button class="btn ghost sm">'+a+'</button>').join('')}</div></div>`;
+  document.getElementById('drawer').classList.add('on');
+}
+document.getElementById('drawer').addEventListener('click',e=>{
+  if(e.target.closest('.bd')&&e.target.tagName==='BUTTON'){ toast('原型里这一动作未接真实逻辑'); }
+});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') document.getElementById('drawer').classList.remove('on'); });
+document.addEventListener('click',e=>{
+  if(!e.target.closest('#drawer')&&!e.target.closest('.obj')) document.getElementById('drawer').classList.remove('on');
+});
+
+/* ---------------- toast ---------------- */
+let tt;
+function toast(html){
+  const t=document.getElementById('toast');
+  t.innerHTML=html; t.classList.add('on');
+  clearTimeout(tt); tt=setTimeout(()=>t.classList.remove('on'),3400);
+}
+
+/* ---------------- upgrade ---------------- */
+const LEVELS=[
+  {chip:'🟢 自家 · L0',cls:'l0',name:'Solo 档'},
+  {chip:'🔵 熟人 · L1',cls:'l1',name:'Team 档'},
+  {chip:'🟡 公开 · L2',cls:'l2',name:'Commons 档'},
+  {chip:'🔴 敌对 · L3',cls:'l3',name:'Commons 档'}
+];
+let lv=0;
+document.getElementById('upgradeBtn').addEventListener('click',()=>{
+  lv=(lv+1)%4;
+  const L=LEVELS[lv];
+  const c=document.getElementById('trust'); c.textContent=L.chip; c.className='chip '+L.cls;
+  document.getElementById('profileName').textContent=L.name;
+  const why=['你自己一个人的设备：不需要任何防御，最省资源。',
+    '熟人房间（同 WiFi / 同团队）：开账本与效应审计。',
+    '公开房间：开共识探针 + 声誉 + Update 签名 + 信任锚。注意——只在恶意比例不超阈值时才成立。',
+    '完全开放：最高防御 + 非对称身份。界面上必须显式标注"我在跟谁协作"。'][lv];
+  toast('<b>升格</b> → '+L.chip.split(' ')[1]+' 档：'+why+'<br>对象与账本无损迁移，这只是可见范围变更。');
+});
+document.getElementById('newBtn').addEventListener('click',()=>toast('原型里未接真实训练。<b>真实闭环</b>在仓库的 pages/ 联邦 demo 里。'));
+document.getElementById('forkOnly').addEventListener('click',()=>toast('<b>fork-only</b>：合并不通过 ≠ 成果消失，它可以作为一条分支继续存在。'));
+
+/* ---------------- feed ---------------- */
+document.getElementById('roomFeed').innerHTML=ROOMS.map(r=>{
+  const badge = r.lv===1?'<span class="chip l1">🔵 L1 熟人</span>':'<span class="chip l2">🟡 L2 公开</span>';
+  return `<div class="card feeditem">
+    <div class="lft">
+      <div class="nm">${r.n}</div>
+      <div class="meta">发起 @${r.by.replace('@','')} · ${badge} · ${r.nodes} 节点 · 第 ${r.round} 轮 · 配方 ${r.recipe} · 数据 ${r.data} 份 · ${r.eta}</div>
+    </div>
+    <div class="actions">
+      <button class="btn sm">加入贡献算力</button>
+      <button class="btn ghost sm">查看血缘</button>
+    </div>
+  </div>`;
+}).join('');
+
+/* ---------------- task card ---------------- */
+document.getElementById('taskCard').innerHTML=`
+  <div class="cardhead"><span class="t">提升医疗方言问答</span><span class="h">t9f1…0031</span><span class="chip l2">🟡 公开</span></div>
+  <div class="kv"><span>目标（有界、可观测）</span><b>闽南语医疗问句的 F1 ≥ 0.60</b></div>
+  <div class="kv"><span>显式排除</span><b>不涉及诊断建议；不改基座结构</b></div>
+  <div class="kv"><span>验收</span><b>kind = probe · eval-suite-A（配对 CRN）</b></div>
+  <div class="kv"><span>阈值</span><b>med-qa ≥ 0.60（CI 下界）· 通用能力不回退 &gt; 2%</b></div>
+  <div class="kv"><span>验证者</span><b>probe-only · 3 个独立节点复算</b></div>
+  <div class="kv"><span>权限边界</span><b>可提议 ✓ 可执行 ✓ 不可对外发布 ✗</b></div>
+  <div class="kv"><span>预算</span><b>≤ 2 h 墙钟 · 通信 ≤ 80 MB · 无代币</b></div>
+  <div class="actions" style="margin-top:12px">
+    <button class="btn sm" id="verifyBtn">跑一次验收（演示）</button>
+    <span class="verdict wait" id="verifyOut" style="align-self:center">未运行</span>
+  </div>
+  <div class="note">"验收即探针"是与所有现有任务协议的分水岭：别人的验收是一份声明，我们的验收是一次可复算的检查。</div>`;
+
+document.getElementById('verifyBtn').addEventListener('click',()=>{
+  const out=document.getElementById('verifyOut');
+  out.className='verdict wait'; out.textContent='复算中…';
+  let n=0; const steps=['加载探针 7bd0…2e44','配对 CRN · 同批 item 同序','计算 med-qa = 0.63','计算 CI（Wilson）','与基线配对差分'];
+  const iv=setInterval(()=>{
+    out.textContent='复算中… '+(steps[n]||'');
+    if(++n>=steps.length){
+      clearInterval(iv);
+      out.className='verdict ok';
+      out.textContent='通过 · 0.63 [0.60, 0.66] · 通用 −0.4%';
+      toast('<b>验收通过</b>：0.63，置信区间 [0.60,0.66]，下界达阈；通用能力未回退。结论带区间，可被第三方重放。');
+    }
+  },520);
+});
+
+/* ---------------- ledger ---------------- */
+document.getElementById('ledgerBody').innerHTML=LEDGER.map(r=>`
+  <tr class="clk"><td>${r.n}</td><td><span class="tag">${r.r}</span></td>
+  <td class="num">${(r.s*100).toFixed(0)}%</td><td class="num">${r.phi}</td><td class="num">${r.c}</td></tr>`).join('');
+document.querySelectorAll('#ledgerBody tr').forEach(tr=>tr.addEventListener('click',()=>toast('每条贡献都可凭 aggregationRuleId + probeResultHash 重放复算。')));
+
+/* ---------------- graph ---------------- */
+const NODES=[
+  {id:'n_data',x:20, y:40, w:170,h:52,t:'数据集 TinyShakespeare',s:'1.12M 字符',c:'#2a2750',b:'#4a4582'},
+  {id:'n_diff',x:20, y:150,w:170,h:52,t:'数据补丁 +医疗方言',s:'+12k · 分布Δ',c:'#0f3329',b:'#1e6b53'},
+  {id:'n_rec', x:300,y:95, w:180,h:52,t:'配方 zh-lora-v2',s:'基座+数据+策略',c:'#2a2750',b:'#4a4582'},
+  {id:'n_base',x:300,y:230,w:180,h:52,t:'模型 base-0.5b',s:'公共基座',c:'#10304c',b:'#245b8a'},
+  {id:'n_model',x:610,y:40,w:180,h:52,t:'模型 闽南语 v3',s:'126M · 探针 0.78',c:'#2a2750',b:'#4a4582'},
+  {id:'n_ad',  x:610,y:150,w:180,h:52,t:'适配器 med-lora',s:'rank 8→32',c:'#0f3329',b:'#1e6b53'},
+  {id:'n_task',x:610,y:248,w:180,h:52,t:'任务 医疗方言问答',s:'验收=探针',c:'#3a2a0c',b:'#7a5514'}
+];
+const EDGES=[
+  ['n_data','n_rec','数据'],['n_diff','n_rec','补丁'],['n_base','n_rec','基座'],
+  ['n_base','n_model','fork'],['n_rec','n_model','train'],['n_ad','n_model','merge'],
+  ['n_model','n_task','验收']
+];
+const byId=Object.fromEntries(NODES.map(n=>[n.id,n]));
+function ctr(n,side){
+  if(side==='r') return [n.x+n.w, n.y+n.h/2];
+  if(side==='l') return [n.x, n.y+n.h/2];
+  if(side==='t') return [n.x+n.w/2, n.y];
+  return [n.x+n.w/2, n.y+n.h];
+}
+let g='';
+EDGES.forEach(([a,b,lab],i)=>{
+  const A=byId[a],B=byId[b];
+  const [x1,y1]=ctr(A,'r');
+  const [x2,y2]=ctr(B,'l');
+  const mx=(x1+x2)/2;
+  g+=`<path class="gedge" data-e="${i}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" marker-end="url(#ar)"/>`;
+  g+=`<text class="gelabel" x="${mx-8}" y="${(y1+y2)/2-4}" text-anchor="middle">${lab}</text>`;
+});
+NODES.forEach(n=>{
+  g+=`<g class="gnode" data-n="${n.id}">
+    <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="9" fill="${n.c}" stroke="${n.b}" stroke-width="0.8"/>
+    <text x="${n.x+12}" y="${n.y+22}">${n.t}</text>
+    <text class="sub" x="${n.x+12}" y="${n.y+38}">${n.s}</text>
+  </g>`;
+});
+document.getElementById('graphSvg').innerHTML=
+  `<defs><marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+   <path d="M2 1L8 5L2 9" fill="none" stroke="#45453e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>`+g;
+
+const MAP={n_data:'data1',n_diff:'diff1',n_rec:'recipe1',n_base:'model1',n_model:'model1',n_ad:'adapter1',n_task:'task1'};
+document.getElementById('graphSvg').addEventListener('click',e=>{
+  const nd=e.target.closest('.gnode'); if(!nd) return;
+  openDrawer(MAP[nd.dataset.n]);
+});
+document.getElementById('graphSvg').addEventListener('mousemove',e=>{
+  const nd=e.target.closest('.gnode');
+  document.querySelectorAll('.gnode').forEach(x=>x.classList.toggle('dim',!!nd&&x!==nd));
+});
+
+/* ---------------- agent ---------------- */
+const REPLIES={
+  plan:`register.query("小 LM", budget=512MB, devices=[phone,pc])
+  → 命中 12 个相关 op schema
+
+llm.generate(schema)  → IR v0
+ir.infer(IR v0)       → ERROR SHAPE_MISMATCH @ head.port.in
+                        fix: insert-op Reshape          [毫秒级 · 不跑 GPU]
+IR v1
+ir.plan(IR v1, cluster=[phone,pc])
+  → 台式机: backprop · 公司本: lora · 手机: evaluator-only
+  → BUDGET_EXCEEDED：layers 8 → 6，或 dim 256 → 192
+
+建议：layers=6, dim=192, vocab=8k  →  预估 29.4M 参数，手机可评估
+
+要不要我把这版存成一个配方？`,
+  cost:`按本轮实测反推：
+
+  权重增量（LoRA rank 8）     ≈ 3.4 MB / 轮
+  压缩后（top-3% + 2bit）      ≈ 0.11 MB / 轮
+  3 节点 · 每轮上行合计        ≈ 0.33 MB / 轮
+  7 轮累计                     ≈ 2.3 MB
+
+对照：全量 fp32 126M 参数 = 504 MB / 轮 —— 上行 5Mbps 要 13 分钟，
+不可行。所以缺的不是显存，是上行带宽。
+
+建议：维持 LoRA + 稀疏压缩，别上全量。`,
+  fix:`ir.infer 报的 3 条：
+
+  1) SHAPE_MISMATCH  head.port.in
+     Attn 输出 [B,T,dim] 直接接 Head，缺 Reshape
+     fix: 在 head 前插一个 Reshape（或让 Head 接受 3D）
+
+  2) CAP_MISSING     blocks[*].op=Block
+     Block 里的 Norm 未声明 vjp，反传路径断
+     fix: Norm 需要 vjp，或用低秩反传（lowrank-bp）
+
+  3) BUDGET_EXCEEDED plan()
+     预估峰值显存 604 MB > 512 MB
+     fix: layers 8→6
+
+我可以一次性改好并重新 infer。要我改吗？`
+};
+document.getElementById('agentChips').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  const k=b.dataset.k;
+  const pre=document.createElement('div');
+  pre.innerHTML=`<div class="msg" style="margin-top:12px">${b.textContent}</div><pre>${REPLIES[k]}</pre>
+  <div class="actions" style="margin-top:8px"><button class="btn ghost sm">存成配方</button><button class="btn ghost sm">我要改一处</button></div>`;
+  document.getElementById('agentBody').appendChild(pre);
+  pre.scrollIntoView({behavior:'smooth',block:'end'});
+});
+</script>
+</body>
+</html>
