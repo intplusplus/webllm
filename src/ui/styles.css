@@ -374,3 +374,182 @@ ul.tests li .detail {
   margin: 0;
   color: var(--fg, #e6edf3);
 }
+
+/* ---------- 我教它 ---------- */
+.tb-teachrow
+{
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.tb-teachrow .tb-input
+{
+  flex: 1;
+}
+
+.tb-steps
+{
+  width: 76px;
+  flex: none;
+}
+
+.tb-teach-err
+{
+  color: #f85149;
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.tb-teachlist
+{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+  min-height: 20px;
+}
+
+/* ---------- 进化时间线 ---------- */
+.tb-evol
+{
+  display: flex;
+  gap: 18px;
+  margin-bottom: 8px;
+}
+
+.tb-evol-col
+{
+  flex: 1;
+  min-width: 0;
+}
+
+.tb-evol-probe
+{
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--accent, #58a6ff);
+  margin-bottom: 6px;
+}
+
+.tb-evol-items
+{
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tb-evol-item
+{
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.tb-evol-step
+{
+  color: #7d8796;
+  flex: none;
+  width: 64px;
+}
+
+.tb-evol-text
+{
+  color: var(--fg, #e6edf3);
+  word-break: break-all;
+}
+
+/* ---------- 模型脑内（候选概率） ---------- */
+.tb-probs
+{
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.tb-probs summary
+{
+  cursor: pointer;
+  color: #7d8796;
+  user-select: none;
+}
+
+.tb-prob-row
+{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 4px 10px;
+  flex-wrap: wrap;
+}
+
+.tb-prob-pick
+{
+  font-family: monospace;
+  color: var(--accent, #58a6ff);
+  flex: none;
+}
+
+.tb-prob
+{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tb-prob-ch
+{
+  font-family: monospace;
+  color: var(--fg, #e6edf3);
+}
+
+.tb-prob-bar
+{
+  display: inline-block;
+  height: 8px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #58a6ff, #a371f7);
+}
+
+.tb-prob-p
+{
+  color: #7d8796;
+  font-size: 11px;
+}
+
+/* ---------- 二选一（偏好） ---------- */
+.tb-compare
+{
+  display: flex;
+  gap: 12px;
+  margin: 10px 0;
+  flex-wrap: wrap;
+}
+
+.tb-compare-card
+{
+  flex: 1;
+  min-width: 220px;
+  padding: 10px 12px;
+  background: var(--panel, #11161f);
+  border: 1px solid var(--line, #232b38);
+  border-radius: 10px;
+}
+
+.tb-compare-label
+{
+  font-size: 12px;
+  color: #7d8796;
+  margin-bottom: 4px;
+}
+
+.tb-compare-text
+{
+  font-family: monospace;
+  font-size: 14px;
+  margin-bottom: 6px;
+  word-break: break-all;
+}

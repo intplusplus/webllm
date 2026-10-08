@@ -20,6 +20,7 @@ import {
   makeSftSamples,
   makeDpoPairs,
   SFT_VOCAB,
+  SFT_STOI,
   type SftSample,
 } from '../train/sft-data';
 import { buildBatch } from '../train/sft';
@@ -56,9 +57,34 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
   let stopRequested = false;
   let busy = false;
 
+  // 「我教它」/ 偏好池：用户参与训练的数据（localStorage 持久化，刷新不丢）
+  const MY_KEY = 'trainbench-my-samples';
+  const PREF_KEY = 'trainbench-pref-pairs';
+  const mySamples: SftSample[] = loadJson( MY_KEY, [] );
+  const prefPairs: Array<{ prompt: string; chosen: string; rejected: string }> = loadJson( PREF_KEY, [] );
+
+  function loadJson<T> ( key: string, fallback: T ): T
+  {
+    try
+    {
+      const raw = localStorage.getItem( key );
+      return raw ? ( JSON.parse( raw ) as T ) : fallback;
+    }
+    catch { return fallback; }
+  }
+  function saveJson ( key: string, value: unknown ): void
+  {
+    try { localStorage.setItem( key, JSON.stringify( value ) ); } catch { /* 隐私模式等，忽略 */ }
+  }
+
+  // 进化时间线：探针 → 对应快照列容器
+  const EVOL_PROBES = [ 'Reverse: abc -> ', 'Sort: bca -> ' ] as const;
+  const evolCols = new Map<string, HTMLElement>();
+
   const pretrainCurve: CurvePoint[] = [];
   const sftCurve: CurvePoint[] = [];
   const dpoCurve: CurvePoint[] = [];
+  const teachCurve: CurvePoint[] = [];
 
   // ------------------------------------------------------------ DOM 骨架
   const el = <K extends keyof HTMLElementTagNameMap>( tag: K, cls?: string, text?: string ): HTMLElementTagNameMap[ K ] =>
@@ -126,27 +152,76 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
   legend.append(
     legendDot( '#58a6ff', '预训练 loss' ),
     legendDot( '#3fb950', 'SFT loss' ),
+    legendDot( '#a371f7', '教学 loss' ),
     legendDot( '#d29922', 'DPO margin' ),
   );
   chartCard.append( legend );
   wrap.append( chartCard );
 
+  // 进化时间线：训练中定期用当前模型对固定探针生成，看见「它什么时候学会」
+  const evolCard = el( 'section', 'tb-card' );
+  evolCard.append( el( 'h2', undefined, '它的进化（训练中定期用当前模型做同一道题）' ) );
+  const evolProbes = el( 'div', 'tb-evol' );
+  evolProbes.append(
+    evolColumn( 'Reverse: abc -> ' ),
+    evolColumn( 'Sort: bca -> ' ),
+  );
+  evolCard.append( evolProbes );
+  evolCard.append( el( 'div', 'hint', '左边一行 = 同一道题在不同训练步数下的回答。从乱码到正确答案，就是训练在发生。' ) );
+  wrap.append( evolCard );
+
   // 指标卡
   const metrics = el( 'div', 'tb-metrics' );
   wrap.append( metrics );
 
-  // 对话
+  // 「我教它」：用户自定义样本 —— 训练台从「演示」变成「实验室」的核心
+  const teachCard = el( 'section', 'tb-card' );
+  teachCard.append( el( 'h2', undefined, '教它 · 你写的样本，它真的会学会' ) );
+  teachCard.append( el( 'div', 'hint',
+    '模型是字符级的：只会小写字母和 RS:-> 空格换行。教它任何「输入 -> 输出」的对应关系，' +
+    '比如 abc -> cba，或你的暗号 qq -> zzz。添加几条后点「教它」，然后到下面对话框考它。' ) );
+  const teachRow = el( 'div', 'tb-teachrow' );
+  const teachIn = el( 'input', 'tb-input' ) as HTMLInputElement;
+  teachIn.placeholder = '它该学会什么？例如：abc -> cba';
+  const teachStepsIn = el( 'input', 'tb-input tb-steps' ) as HTMLInputElement;
+  teachStepsIn.type = 'number';
+  teachStepsIn.min = '20';
+  teachStepsIn.max = '600';
+  teachStepsIn.value = '60';
+  teachStepsIn.title = '教学步数';
+  const teachBtn = el( 'button', 'tb-btn tb-btn-primary', '▶ 教它' ) as HTMLButtonElement;
+  teachRow.append( teachIn, teachStepsIn, teachBtn );
+  teachCard.append( teachRow );
+  const teachErr = el( 'div', 'tb-teach-err' );
+  teachErr.style.display = 'none';
+  teachCard.append( teachErr );
+  const teachList = el( 'div', 'tb-teachlist' );
+  teachCard.append( teachList );
+  teachCard.append( el( 'div', 'hint', '点列表里的句子可删除。教学 = 在当前模型上继续训练，只学你这些句子。' ) );
+  wrap.append( teachCard );
+
+  // 对话（考它 / 对比偏好）
   const chatCard = el( 'section', 'tb-card' );
-  chatCard.append( el( 'h2', undefined, '指令对话（tiny-GPT · 贪心解码）' ) );
-  const chatLog = el( 'div', 'tb-chatlog', '先完成 SFT（第 2 阶段），然后试试下面的指令。' );
+  chatCard.append( el( 'h2', undefined, '考它（每一步显示模型脑内的候选概率）' ) );
+  const chatLog = el( 'div', 'tb-chatlog', '先教它或跑一次 SFT，然后在这里考它。' );
   chatCard.append( chatLog );
   const chatRow = el( 'div', 'tb-chatrow' );
   const chatInput = el( 'input', 'tb-input' ) as HTMLInputElement;
   chatInput.placeholder = 'Reverse: abcd -> ';
   const btnSend = el( 'button', 'tb-btn', '生成' ) as HTMLButtonElement;
   btnSend.disabled = true;
-  chatRow.append( chatInput, btnSend );
+  const btnCompare = el( 'button', 'tb-btn', '⚖ 二选一（教它品味）' ) as HTMLButtonElement;
+  btnCompare.disabled = true;
+  btnCompare.title = '同一问题出两个回答，你选更好的 —— 攒成偏好对，按你的偏好对齐';
+  chatRow.append( chatInput, btnSend, btnCompare );
   chatCard.append( chatRow );
+  const compareBox = el( 'div', 'tb-compare' );
+  compareBox.style.display = 'none';
+  chatCard.append( compareBox );
+  const btnAlign = el( 'button', 'tb-btn tb-btn-primary', '▶ 按我的偏好对齐' ) as HTMLButtonElement;
+  btnAlign.disabled = true;
+  btnAlign.style.display = 'none';
+  chatCard.append( btnAlign );
   const chatExamples = el( 'div', 'tb-examples' );
   for ( const ex of [ 'Reverse: abcd -> ', 'Sort: dbca -> ', 'Reverse: xyz -> ' ] )
   {
@@ -175,7 +250,18 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
   {
     busy = value;
     btnStop.disabled = !value;
-    for ( const b of [ btnAll, btnPre, btnSft, btnDpo, btnSend ] ) ( b as HTMLButtonElement ).disabled = value;
+    for ( const b of [ btnAll, btnPre, btnSft, btnDpo, btnSend, btnCompare, teachBtn, btnAlign ] ) ( b as HTMLButtonElement ).disabled = value;
+  }
+
+  /** 进化时间线的一列：探针标题 + 快照列表。 */
+  function evolColumn ( probe: string ): HTMLElement
+  {
+    const col = el( 'div', 'tb-evol-col' );
+    col.append( el( 'div', 'tb-evol-probe', probe ) );
+    const items = el( 'div', 'tb-evol-items' );
+    col.append( items );
+    evolCols.set( probe, items );
+    return col;
   }
 
   function refreshButtons (): void
@@ -184,6 +270,9 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
     btnSft.disabled = busy || trainer === null;
     btnDpo.disabled = busy || trainer === null;
     btnSend.disabled = busy || trainer === null;
+    btnCompare.disabled = busy || trainer === null;
+    teachBtn.disabled = busy;
+    btnAlign.disabled = busy || trainer === null || prefPairs.length === 0;
   }
 
   function metricCard ( title: string, lines: string[] ): void
@@ -209,6 +298,7 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
     const series = [
       { pts: pretrainCurve, color: '#58a6ff', label: 'pre' },
       { pts: sftCurve, color: '#3fb950', label: 'sft' },
+      { pts: teachCurve, color: '#a371f7', label: 'teach' },
       { pts: dpoCurve, color: '#d29922', label: 'dpo' },
     ];
     const all = series.flatMap( ( s ) => s.pts );
@@ -286,6 +376,8 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
     let firstLoss = 0;
     let last = 0;
     const t0 = performance.now();
+    const probeEvery = Math.max( 10, Math.floor( steps / 8 ) );
+    await probeSnapshot( 0, 'pre' );
 
     for ( let s = 0; s < steps; s++ )
     {
@@ -314,6 +406,7 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
         setStatus( `预训练 ${ s + 1 }/${ steps }，loss ${ last.toFixed(3) }` );
         drawChart();
       }
+      if ( ( s + 1 ) % probeEvery === 0 || s === steps - 1 ) await probeSnapshot( s + 1, 'pre' );
     }
     metricCard( '预训练', [
       `${ steps } 步 · ${ ( ( performance.now() - t0 ) / 1000 ).toFixed( 1 ) }s`,
@@ -336,6 +429,8 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
     let first = 0;
     let last = 0;
     const t0 = performance.now();
+    const probeEvery = Math.max( 10, Math.floor( steps / 8 ) );
+    await probeSnapshot( 0, 'sft' );
 
     for ( let s = 0; s < steps; s++ )
     {
@@ -358,6 +453,7 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
         setStatus( `SFT ${ s + 1 }/${ steps }，loss ${ last.toFixed(3) }` );
         drawChart();
       }
+      if ( ( s + 1 ) % probeEvery === 0 || s === steps - 1 ) await probeSnapshot( s + 1, 'sft' );
     }
     metricCard( 'SFT 微调', [
       `${ steps } 步 · ${ ( ( performance.now() - t0 ) / 1000 ).toFixed( 1 ) }s`,
@@ -369,18 +465,29 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
 
   async function runDpo (): Promise<void>
   {
+    await runDpoOn( makeDpoPairs( 31337, 12 ), isCpu ? CPU_STEPS.dpo : 120, 'DPO 对齐' );
+  }
+
+  /**
+   * DPO 通用驱动：pairs 是「prompt + chosen/rejected completion」的偏好对，
+   * 内置任务与用户在对话里攒的偏好都走这里。
+   */
+  async function runDpoOn (
+    pairs: Array<{ sample: SftSample; rejected: string }>,
+    steps: number,
+    label: string,
+  ): Promise<void>
+  {
     const t = await ensureTrainer();
-    const pairs = makeDpoPairs( 31337, 12 );
     const K = 4;
     const beta = 0.5;
     const opts = { lr: 1e-3, b1: 0.9, b2: 0.99, eps: 1e-8, wd: 0.0 };
-    const steps = isCpu ? CPU_STEPS.dpo : 120;
     const V = UI_CONFIG.vocabSize;
     const T0 = performance.now();
 
     // reference：冻结当前权重的推理副本
     // GPU：TinyGpt（WGSL 推理）；CPU：再起一个 CpuTrainer 当冻结副本（只 forward）
-    setStatus( 'DPO：冻结 reference 模型…' );
+    setStatus( `${ label }：冻结 reference 模型…` );
     const refWeights = await t.exportWeights();
     let refLogitsOf: ( tokens: Uint32Array, B: number, T: number ) => Promise<Float32Array>;
     if ( isCpu )
@@ -462,11 +569,11 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
       if ( s % 2 === 1 || s === steps - 1 )
       {
         dpoCurve.push( { x: s + 1, y: last } );
-        setStatus( `DPO ${ s + 1 }/${ steps }，margin ${ last.toFixed(3) }` );
+        setStatus( `${ label } ${ s + 1 }/${ steps }，margin ${ last.toFixed(3) }` );
         drawChart();
       }
     }
-    metricCard( 'DPO 对齐', [
+    metricCard( label, [
       `${ steps } 步 · ${ ( ( performance.now() - T0 ) / 1000 ).toFixed( 1 ) }s`,
       `margin ${ m0.toFixed( 3 ) } → ${ last.toFixed( 3 ) }（相对 reference 的偏好差）`,
     ] );
@@ -509,43 +616,306 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
     btnSend.disabled = false;
   }
 
-  // ------------------------------------------------------------ 对话
-  async function send (): Promise<void>
-  {
-    if ( !trainer || busy ) return;
-    const prompt = chatInput.value.trim();
-    if ( !prompt ) return;
-    chatInput.value = '';
-    const userLine = el( 'div', 'tb-chat-user', prompt );
-    chatLog.append( userLine );
-    const botLine = el( 'div', 'tb-chat-bot' );
-    chatLog.append( botLine );
-    chatLog.scrollTop = chatLog.scrollHeight;
+  // ------------------------------------------------------------ 生成与对话
 
-    const started = performance.now();
+  /** 词表校验：返回第一条错误提示；合法返回 null。 */
+  function vocabError ( text: string ): string | null
+  {
+    for ( const ch of text )
+    {
+      if ( !SFT_STOI.has( ch ) )
+        return `字符 ${ JSON.stringify( ch ) } 不在词表里（只会小写字母和 RS:-> 空格换行）`;
+    }
+    return null;
+  }
+
+  /**
+   * 从 prompt 生成最多 maxChars 个字符。
+   * temperature=0 → 贪心；>0 → 按 softmax(v/T) 采样。
+   * 每一步都带回 top5 候选与概率 —— 「看见模型的脑子」。
+   */
+  async function generateFrom (
+    prompt: string,
+    maxChars: number,
+    temperature: number,
+  ): Promise<{ text: string; steps: Array<{ ch: string; top: Array<{ ch: string; p: number }> }> }>
+  {
+    if ( !trainer ) throw new Error( '模型还没初始化' );
+    const V = UI_CONFIG.vocabSize;
     const ids = [ ...encodeSft( prompt ) ];
-    let out = '';
-    for ( let i = 0; i < 8; i++ )
+    const out: string[] = [];
+    const steps: Array<{ ch: string; top: Array<{ ch: string; p: number }> }> = [];
+    for ( let i = 0; i < maxChars; i++ )
     {
       const T = Math.min( ids.length, UI_CONFIG.blockSize );
       const window = Uint32Array.from( ids.slice( ids.length - T ) );
       trainer.forward( window, 1, T );
       const logits = await trainer.readLogits();
-      const V = UI_CONFIG.vocabSize;
       const lastRow = logits.slice( ( T - 1 ) * V, T * V );
-      let best = 0;
-      for ( let v = 1; v < V; v++ ) if ( lastRow[ v ] > lastRow[ best ] ) best = v;
-      const ch = SFT_VOCAB[ best ];
+      const temp = Math.max( 1e-3, temperature );
+      let mx = -Infinity;
+      for ( let v = 0; v < V; v++ ) mx = Math.max( mx, lastRow[ v ] );
+      const scaled = new Float32Array( V );
+      let sum = 0;
+      for ( let v = 0; v < V; v++ )
+      {
+        scaled[ v ] = Math.exp( ( lastRow[ v ] - mx ) / temp );
+        sum += scaled[ v ];
+      }
+      const order = [ ...scaled.keys() ].sort( ( a, b ) => scaled[ b ] - scaled[ a ] );
+      const top = order.slice( 0, 5 ).map( ( v ) => ( { ch: SFT_VOCAB[ v ], p: scaled[ v ] / sum } ) );
+      let pick: number;
+      if ( temperature <= 0 )
+      {
+        pick = order[ 0 ];
+      }
+      else
+      {
+        let r = Math.random() * sum;
+        pick = order[ 0 ];
+        for ( let v = 0; v < V; v++ ) { r -= scaled[ v ]; if ( r <= 0 ) { pick = v; break; } }
+      }
+      const ch = SFT_VOCAB[ pick ];
+      steps.push( { ch, top } );
       if ( ch === '\n' ) break;
-      out += ch;
-      ids.push( best );
-      botLine.textContent = out;
-      chatLog.scrollTop = chatLog.scrollHeight;
+      out.push( ch );
+      ids.push( pick );
     }
-    const ms = performance.now() - started;
-    const meta = el( 'div', 'tb-chat-meta', `${ out.length } chars · ${ ms.toFixed( 0 ) }ms` );
-    chatLog.append( meta );
+    return { text: out.join( '' ), steps };
+  }
+
+  const dispCh = ( ch: string ): string => ( ch === ' ' ? '␣' : ch === '\n' ? '↵' : ch );
+
+  /** 每一步的候选概率可视化（默认折叠，展开看「模型的脑子」）。 */
+  function probStepsDom ( steps: Array<{ ch: string; top: Array<{ ch: string; p: number }> }> ): HTMLElement
+  {
+    const det = el( 'details', 'tb-probs' ) as HTMLDetailsElement;
+    det.append( el( 'summary', undefined, `模型脑内（${ steps.length } 步的候选概率）` ) );
+    for ( let i = 0; i < steps.length; i++ )
+    {
+      const { ch, top } = steps[ i ];
+      const row = el( 'div', 'tb-prob-row' );
+      row.append( el( 'span', 'tb-prob-pick', `${ i + 1 }→${ dispCh( ch ) }` ) );
+      for ( const t of top )
+      {
+        const item = el( 'span', 'tb-prob' );
+        const bar = el( 'span', 'tb-prob-bar' ) as HTMLElement;
+        bar.style.width = `${ Math.max( 2, Math.round( t.p * 60 ) ) }px`;
+        item.append(
+          el( 'span', 'tb-prob-ch', dispCh( t.ch ) ),
+          bar,
+          el( 'span', 'tb-prob-p', `${ Math.round( t.p * 100 ) }%` ),
+        );
+        row.append( item );
+      }
+      det.append( row );
+    }
+    return det;
+  }
+
+  async function send (): Promise<void>
+  {
+    if ( !trainer || busy ) return;
+    const prompt = chatInput.value.trim();
+    if ( !prompt ) return;
+    const bad = vocabError( prompt );
+    if ( bad ) { setStatus( `考题有问题：${ bad }` ); return; }
+    chatInput.value = '';
+    chatLog.append( el( 'div', 'tb-chat-user', prompt ) );
+    const botLine = el( 'div', 'tb-chat-bot' );
+    chatLog.append( botLine );
     chatLog.scrollTop = chatLog.scrollHeight;
+
+    const started = performance.now();
+    const r = await generateFrom( prompt, 8, 0 );
+    botLine.textContent = r.text === '' ? '（生成了空回答）' : r.text;
+    const ms = performance.now() - started;
+    const wrap0 = el( 'div', 'tb-chat-meta' );
+    wrap0.append( el( 'span', undefined, `${ r.text.length } chars · ${ ms.toFixed( 0 ) }ms ` ) );
+    wrap0.append( probStepsDom( r.steps ) );
+    chatLog.append( wrap0 );
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  // ------------------------------------------------------------ 我教它
+
+  function showTeachErr ( msg: string ): void
+  {
+    teachErr.textContent = msg;
+    teachErr.style.display = 'block';
+  }
+  function hideTeachErr (): void
+  {
+    teachErr.style.display = 'none';
+  }
+
+  function renderTeachList (): void
+  {
+    teachList.innerHTML = '';
+    if ( mySamples.length === 0 )
+    {
+      teachList.append( el( 'span', 'hint', '还没有你的样本。' ) );
+      return;
+    }
+    mySamples.forEach( ( s, i ) =>
+    {
+      const chip = el( 'button', 'tb-chip', `${ s.prompt }${ s.completion.replace( '\n', '' ) }` ) as HTMLButtonElement;
+      chip.title = '点击删除这条样本';
+      chip.onclick = () =>
+      {
+        mySamples.splice( i, 1 );
+        saveJson( MY_KEY, mySamples );
+        renderTeachList();
+      };
+      teachList.append( chip );
+    } );
+  }
+
+  function addSample (): void
+  {
+    const raw = teachIn.value;
+    const bad = vocabError( raw );
+    if ( bad ) { showTeachErr( bad ); return; }
+    if ( !raw.includes( '->' ) ) { showTeachErr( '格式要包含 ->：左边是考题，右边是期望回答，例如 abc -> cba' ); return; }
+    const cut = raw.indexOf( '->' );
+    const prompt = raw.slice( 0, cut );
+    const completion = raw.slice( cut + 2 ) + '\n';
+    if ( prompt.trim().length === 0 || completion.trim().length === 0 )
+    {
+      showTeachErr( '两侧都不能为空' );
+      return;
+    }
+    if ( prompt.length + completion.length > UI_CONFIG.blockSize )
+    {
+      showTeachErr( `太长：合计 ${ prompt.length + completion.length } 字符，上限 ${ UI_CONFIG.blockSize }（模型窗口就这么大）` );
+      return;
+    }
+    mySamples.push( { prompt, completion } );
+    saveJson( MY_KEY, mySamples );
+    renderTeachList();
+    teachIn.value = '';
+    hideTeachErr();
+  }
+
+  async function runTeach ( steps: number ): Promise<void>
+  {
+    const t = await ensureTrainer();
+    const opts = { lr: 0.01, b1: 0.9, b2: 0.99, eps: 1e-8, wd: 0.0 };
+    let first = 0;
+    let last = 0;
+    teachCurve.length = 0;
+    const t0 = performance.now();
+    await probeSnapshot( 0, 'teach' );
+
+    for ( let s = 0; s < steps; s++ )
+    {
+      if ( stopRequested ) return;
+      const idx = Array.from( { length: 8 }, ( _, i ) => ( s * 8 + i ) % mySamples.length );
+      const batch = buildBatch( idx.map( ( i ) => mySamples[ i ] ), PAD_ID );
+      t.forward( batch.tokens, batch.B, batch.T );
+      last = await t.loss( batch.targets, batch.weights );
+      if ( s === 0 ) first = last;
+      t.backward( batch.targets, batch.weights );
+      t.step( opts );
+      teachCurve.push( { x: s + 1, y: last } );
+      if ( s % 5 === 4 || s === steps - 1 )
+      {
+        setStatus( `教学 ${ s + 1 }/${ steps }，loss ${ last.toFixed( 3 ) }` );
+        drawChart();
+      }
+    }
+    metricCard( '教学', [
+      `${ mySamples.length } 条样本 · ${ steps } 步 · ${ ( ( performance.now() - t0 ) / 1000 ).toFixed( 1 ) }s`,
+      `loss ${ first.toFixed( 3 ) } → ${ last.toFixed( 3 ) } —— 去下面考它`,
+    ] );
+    await probeSnapshot( steps, 'teach' );
+    await autoSave( 'teach' );
+  }
+
+  // ------------------------------------------------------------ 偏好（二选一 → DPO）
+
+  async function runCompare (): Promise<void>
+  {
+    if ( !trainer || busy ) return;
+    const prompt = chatInput.value.trim();
+    if ( !prompt ) { setStatus( '先在左边输入考题，再点二选一' ); return; }
+    const bad = vocabError( prompt );
+    if ( bad ) { setStatus( `考题有问题：${ bad }` ); return; }
+    chatInput.value = '';
+    chatLog.append( el( 'div', 'tb-chat-user', `${ prompt }（对比模式）` ) );
+    compareBox.innerHTML = '';
+    compareBox.style.display = 'block';
+
+    // A = 贪心（模型最有把握的回答）；B = 温度 0.8 采样（模型的另一种想法）
+    const a = await generateFrom( prompt, 8, 0 );
+    const b = await generateFrom( prompt, 8, 0.8 );
+    if ( a.text === b.text )
+    {
+      compareBox.append( el( 'div', 'hint',
+        `两个候选一样（"${ a.text || '（空）' }"）—— 模型对这道题非常确定。换个没教过的问题再试。` ) );
+      chatLog.scrollTop = chatLog.scrollHeight;
+      return;
+    }
+
+    const mk = ( label: string, text: string, steps: Array<{ ch: string; top: Array<{ ch: string; p: number }> }> ): HTMLElement =>
+    {
+      const card = el( 'div', 'tb-compare-card' );
+      card.append( el( 'div', 'tb-compare-label', label ) );
+      card.append( el( 'div', 'tb-compare-text', text === '' ? '（空回答）' : text ) );
+      card.append( probStepsDom( steps ) );
+      const btn = el( 'button', 'tb-btn', '✓ 这个更好' ) as HTMLButtonElement;
+      btn.onclick = () =>
+      {
+        prefPairs.push( { prompt, chosen: text + '\n', rejected: ( text === a.text ? b : a ).text + '\n' } );
+        saveJson( PREF_KEY, prefPairs );
+        compareBox.innerHTML = '';
+        compareBox.style.display = 'none';
+        chatLog.append( el( 'div', 'tb-chat-meta', `已记录：在 "${ prompt }" 上你偏好 "${ text }"。攒到 ${ prefPairs.length } 组后可对齐。` ) );
+        chatLog.scrollTop = chatLog.scrollHeight;
+        btnAlign.style.display = 'inline-block';
+        btnAlign.disabled = busy || trainer === null;
+      };
+      card.append( btn );
+      return card;
+    };
+    compareBox.append( mk( '候选 A（贪心）', a.text, a.steps ), mk( '候选 B（采样）', b.text, b.steps ) );
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  async function runAlign (): Promise<void>
+  {
+    if ( prefPairs.length === 0 ) return;
+    const pairs = prefPairs.map( ( p ) => ( {
+      sample: { prompt: p.prompt, completion: p.chosen } as SftSample,
+      rejected: p.rejected,
+    } ) );
+    const steps = isCpu ? 30 : 60;
+    await runDpoOn( pairs, steps, `按你的偏好对齐（${ pairs.length } 组）` );
+  }
+
+  // ------------------------------------------------------------ 进化时间线
+
+  async function probeSnapshot ( step: number, tag: string ): Promise<void>
+  {
+    if ( !trainer ) return;
+    for ( const probe of EVOL_PROBES )
+    {
+      const col = evolCols.get( probe );
+      if ( !col ) continue;
+      let text = '';
+      try
+      {
+        const r = await generateFrom( probe, 8, 0 );
+        text = r.text;
+      }
+      catch { text = '（生成失败）'; }
+      const item = el( 'div', 'tb-evol-item' );
+      item.append(
+        el( 'span', 'tb-evol-step', `${ tag }#${ step }` ),
+        el( 'span', 'tb-evol-text', text === '' ? '（空）' : text ),
+      );
+      col.append( item );
+    }
   }
 
   // ------------------------------------------------------------ 事件
@@ -581,6 +951,23 @@ export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): vo
   btnStop.onclick = () => { stopRequested = true; setStatus( '停止中（当前步结束后退出）…' ); };
   btnSend.onclick = () => void send();
   chatInput.addEventListener( 'keydown', ( e ) => { if ( e.key === 'Enter' ) void send(); } );
+
+  teachBtn.onclick = () =>
+  {
+    if ( mySamples.length === 0 ) { showTeachErr( '先在输入框写一条样本并回车添加，例如 abc -> cba' ); return; }
+    const n = Math.max( 20, Math.min( 600, Number( teachStepsIn.value ) || 60 ) );
+    teachStepsIn.value = String( n );
+    void withBusy( `教学（${ mySamples.length } 条样本 × ${ n } 步）`, [ () => runTeach( n ) ] );
+  };
+  teachIn.addEventListener( 'keydown', ( e ) =>
+  {
+    if ( e.key === 'Enter' ) addSample();
+  } );
+  btnCompare.onclick = () => void runCompare().catch( ( err ) => setStatus( `出错：${ ( err as Error ).message }` ) );
+  btnAlign.onclick = () => void withBusy( '按你的偏好对齐', [ runAlign ] );
+
+  renderTeachList();
+  if ( prefPairs.length > 0 ) btnAlign.style.display = 'inline-block';
 
   // 恢复已有 checkpoint 的提示
   void ( async () =>
