@@ -271,9 +271,11 @@ export class FedNode
       switch ( msg.t )
       {
         case 'assign':
-          if ( this.manifest )
+          // 同一份清单的重发（房主等就绪时会补发）：补回一次 ready 就行。
+          // 用清单指纹判断 —— 重开一场训练时清单可能换规格（hidden/seed 等），
+          // 拿旧引擎假装就绪会直接把聚合炸掉，必须重建。
+          if ( this.manifest && this.manifest.fingerprint === msg.manifest.fingerprint )
           {
-            // 重发的 assign（房主等就绪时会补发）：模型早就建好了，补回一次 ready 就行
             this.sendReady( true );
             break;
           }
@@ -633,7 +635,14 @@ export class FedNode
   ): Promise<void>
   {
     if ( this.o.role !== 'host' ) throw new Error( 'startHost: 仅房主可用' );
-    if ( this.running || this.currentRound > 0 ) return;
+    if ( this.running )
+    {
+      this.o.events.onLog( '训练已在进行中 —— 无需重复开始' );
+      return;
+    }
+    // 上一场已跑完（currentRound>0 且不在跑）：重开一场，而不是静默忽略。
+    // 曾经这里直接 return，用户视角就是「点开始没反应 / 训练完不能再训」。
+    if ( this.currentRound > 0 ) this.resetSession();
     this.running = true;
     this.stopped = false;
     this.startedAt = Date.now();
@@ -655,12 +664,13 @@ export class FedNode
       ( this.notReady.size > 0 ? ` · ${ this.notReady.size } 个节点暂不可用` : '' ),
     );
 
-    this.initialProbeLoss = await this.evalProbe();
-    this.o.events.onLog( `初始模型探针 loss = ${ this.initialProbeLoss.toFixed( 3 ) }（未训练的基线）` );
-    if ( m.aggregate.mode === 'diloco' ) this.aggState.momentum = null;
-
     try
     {
+      // 探针评估也属于本场训练：失败要走统一的 catch（之前在 try 外，异常会静默）
+      this.initialProbeLoss = await this.evalProbe();
+      this.o.events.onLog( `初始模型探针 loss = ${ this.initialProbeLoss.toFixed( 3 ) }（未训练的基线）` );
+      if ( m.aggregate.mode === 'diloco' ) this.aggState.momentum = null;
+
       for ( let r = 1; r <= m.rounds; r++ )
       {
         if ( this.stopped ) break;
@@ -963,6 +973,33 @@ export class FedNode
   {
     this.stopped = true;
     this.o.events.onStatus( '已请求停止（当前轮结束后退出）' );
+  }
+
+  /**
+   * 重开一场训练前清掉上一场的轮次状态。
+   *
+   * 保留：名单（rosterMap）、语料贡献（credits）、分片分配（assignedShards）——
+   * 这些与「哪一场」无关。清掉：轮次、账本、探针基线、聚合状态、就绪表 ——
+   * 就绪表必须清：新清单可能换规格，节点要按新清单重新回报 ready。
+   */
+  private resetSession (): void
+  {
+    this.currentRound = 0;
+    this.prevGlobal = null;
+    this.currentGlobal = null;
+    this.aggState.momentum = null;
+    this.initialProbeLoss = 0;
+    this.firstProbeLoss = 0;
+    this.lastProbeLoss = 0;
+    this.transportBytes = 0;
+    this.ledger.length = 0;
+    this.submissions.clear();
+    this.misses.clear();
+    this.offlinePeers.clear();
+    this.readyPeers.clear();
+    this.notReady.clear();
+    this.stopped = false;
+    this.o.events.onLog( '重开一场训练：上一场状态已清空' );
   }
 
   private async finish (): Promise<void>

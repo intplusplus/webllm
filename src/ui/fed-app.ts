@@ -946,6 +946,12 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
       releaseWakeLock();
       renderCard( c );
       setBusy( false );
+      // 房主视角：训练完一场后可以随时再开一场（按钮文案随之变化）
+      if ( role === 'host' || view === 'host' )
+      {
+        btnStart.textContent = '▶ 再次训练';
+        btnStart.disabled = false;
+      }
     },
   };
 
@@ -1239,8 +1245,15 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
     // 引擎在**这一刻**才最终确定：房主按房间里所有节点的能力协商（见 FedNode.negotiateEngine），
     // 只要有一台设备跑不了 WebGPU，全网就回退 CPU。
     addLog( '开始训练：房主按全网能力协商引擎 → 下发任务 → 等各节点就绪 → 开轮' );
-    void node
+    node
       .startHost( ( engine, reason ) => buildManifest( corpus!, engine, reason ) )
+      .catch( ( err ) =>
+      {
+        // 开训失败绝不能静默 —— 用户视角的「点了没反应」就是这么来的
+        const msg = ( err as Error ).message ?? String( err );
+        addLog( `开训失败：${ msg }` );
+        setStatus( `开训失败：${ msg }` );
+      } )
       .finally( () => setBusy( false ) );
   };
   btnStop.onclick = () =>

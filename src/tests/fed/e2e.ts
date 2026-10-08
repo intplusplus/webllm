@@ -65,7 +65,7 @@ class TamperingBus extends LocalBus
   }
 }
 
-function makeManifest ( corpus: Corpus, spec: MlpModelSpec, engineReason = '测试固定 mlp' ): RoomManifest
+function makeManifest ( corpus: Corpus, spec: MlpModelSpec, engineReason = '测试固定 mlp', rounds = ROUNDS ): RoomManifest
 {
   const base = {
     roomId: 'e2e-room',
@@ -73,7 +73,7 @@ function makeManifest ( corpus: Corpus, spec: MlpModelSpec, engineReason = '测�
     taskBrief: '端到端测试',
     model: spec,
     engineReason,
-    rounds: ROUNDS,
+    rounds,
     localSteps: LOCAL_STEPS,
     batchSize: BATCH,
     lr: 0.05,
@@ -296,6 +296,42 @@ export async function runFedE2E ( text: string ): Promise<{ results: E2EResult[]
 
   boxD.bus.close();
   await delay( 40 );
+
+  // ---- 重开一场：训练结束后，房主必须能再次「开始训练」 ----
+  // 曾经的守卫是 currentRound>0 就静默 return —— 用户视角就是「点了没反应、不能再训」。
+  // 这里用一份**不同规格**的新清单（hidden/seed 都变），同时验证节点侧会按新清单重建模型。
+  {
+    const roundsBefore = boxA.roundsSeen.length;
+    const spec2: MlpModelSpec = { ...spec, hidden: 48, seed: 888 };
+    const manifest2 = makeManifest( corpus, spec2, '重开会话', 2 );
+    let err2: Error | null = null;
+    try
+    {
+      await Promise.race( [
+        boxA.node.startHost( () => manifest2 ),
+        delay( 60000 ).then( () => { throw new Error( '重开会话超时（60s）' ); } ),
+      ] );
+      await delay( 120 ); // 等最后一轮广播送达
+    }
+    catch ( e )
+    {
+      err2 = e as Error;
+    }
+
+    const specB = boxB.node.engineRef.spec as MlpModelSpec;
+    check( '训练结束后可重开一场（按新清单重跑 2 轮）',
+      err2 === null
+      && boxA.roundsSeen.length === roundsBefore + 2
+      && boxA.node.currentManifest?.fingerprint === manifest2.fingerprint,
+      err2 ? `重开失败：${ err2.message }`
+        : `重开跑了 ${ boxA.roundsSeen.length - roundsBefore } 轮（期望 2），清单指纹${
+          boxA.node.currentManifest?.fingerprint === manifest2.fingerprint ? '已更新' : '未更新'
+        }` );
+
+    check( '节点按新清单重建模型（而非拿旧引擎假装就绪）',
+      specB.hidden === 48 && specB.seed === 888,
+      `B 节点引擎 hidden=${ specB.hidden }，seed=${ specB.seed }（期望 48/888）` );
+  }
 
   boxA.bus.close(); boxB.bus.close(); boxC.bus.close();
   await delay( 40 );
