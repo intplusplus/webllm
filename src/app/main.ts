@@ -72,40 +72,56 @@ async function boot(): Promise<void>
   header.append(el('p', 'sub', '训练台 · 预训练 / SFT / DPO / 对话 —— 全部在浏览器内完成'));
   app.append(header);
 
-  // WebGPU 初始化（失败则整体报错退出）
-  const gpuPre = el( 'pre', 'mono' );
-  gpuPre.style.display = 'none';
-  let gpu: GpuContext;
+  // WebGPU 初始化：失败不致命 —— 训练台降级为 CPU 模式（CpuTrainer 全功能兜底）
+  let gpu: GpuContext | null = null;
+  let gpuNotice = '';
   try
   {
     gpu = await ( await import( '../gpu/device' ) ).initGpu();
   }
   catch ( err )
   {
-    gpuPre.style.display = 'block';
-    gpuPre.className = 'mono bad';
-    gpuPre.textContent = '初始化失败：' + ( err as Error ).message;
-    app.append( gpuPre );
-    return;
+    gpuNotice = ( err as Error ).message;
   }
 
-  // Tab 切换
+  // Tab 切换（自检页需要真实 GPU；CPU 模式下不展示）
   const tabs = el( 'div', 'tabs' );
   const btnTrain = el( 'button', 'tab tab-active', '训练台' ) as HTMLButtonElement;
   const btnTests = el( 'button', 'tab', '自检（44 项）' ) as HTMLButtonElement;
-  tabs.append( btnTrain, btnTests );
-  app.append( tabs );
-
   const trainPane = el( 'div' );
   const testPane = el( 'div' );
-  app.append( trainPane, testPane );
+
+  if ( gpu === null )
+  {
+    // CPU 模式横幅：解释发生了什么 + 原始错误（可展开，不打断主流程）
+    const banner = el( 'section', 'card' );
+    banner.append( el( 'h2', undefined, '已切换到 CPU 模式' ) );
+    banner.append( el( 'p', undefined,
+      '这个浏览器拿不到 WebGPU 的 GPUAdapter（可能被驱动或浏览器策略禁用）。' +
+      '训练台功能不受影响：预训练 / SFT / DPO / 对话会改用纯 CPU 引擎跑完，速度慢一些。' +
+      '想体验 GPU 加速，请用 Chrome / Edge 等支持 WebGPU 的浏览器，并确认显卡驱动已更新。' ) );
+    const details = el( 'details' ) as HTMLDetailsElement;
+    details.append( el( 'summary', undefined, '技术细节（原始错误信息）' ) );
+    details.append( el( 'pre', 'mono', gpuNotice ) );
+    banner.append( details );
+    app.append( banner );
+    app.append( tabs );
+    app.append( trainPane );
+    tabs.append( btnTrain );
+  }
+  else
+  {
+    tabs.append( btnTrain, btnTests );
+    app.append( tabs );
+    app.append( trainPane, testPane );
+  }
 
   function switchTab ( train: boolean ): void
   {
     btnTrain.className = train ? 'tab tab-active' : 'tab';
-    btnTests.className = train ? 'tab' : 'tab tab-active';
+    btnTests.className = gpu === null ? 'tab' : ( train ? 'tab' : 'tab tab-active' );
     trainPane.style.display = train ? 'block' : 'none';
-    testPane.style.display = train ? 'none' : 'block';
+    testPane.style.display = gpu === null ? 'none' : ( train ? 'none' : 'block' );
   }
   btnTrain.onclick = () => switchTab( true );
   btnTests.onclick = () => switchTab( false );
@@ -113,8 +129,8 @@ async function boot(): Promise<void>
   renderTrainApp( gpu, trainPane );
   switchTab( true );
 
-  // 自检在后台启动（切到自检 tab 时结果已在累积）
-  void runSelfTestTab( testPane, gpu );
+  // 自检在后台启动（切到自检 tab 时结果已在累积）；CPU 模式无自检页
+  if ( gpu !== null ) void runSelfTestTab( testPane, gpu );
 }
 
 boot();

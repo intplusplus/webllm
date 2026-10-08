@@ -356,3 +356,21 @@ ul.tests li .detail {
   margin: 8px 0 4px;
   padding-left: 20px;
 }
+
+/* CPU 模式提示卡（无 WebGPU 环境的预期管理） */
+.tb-cpu-note
+{
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: rgba(210, 153, 34, 0.08);
+  border: 1px solid rgba(210, 153, 34, 0.45);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.tb-cpu-note p
+{
+  margin: 0;
+  color: var(--fg, #e6edf3);
+}

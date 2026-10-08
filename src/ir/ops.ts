@@ -337,12 +337,12 @@ function defs (): OpDefinition[]
   add( builtin( {
     op: 'CrossEntropy', version: '1.0',
     props: { reduction: { type: 'enum', values: [ 'mean', 'sum' ], default: 'mean' } },
-    io: { in: [ { name: 'logits' }, { name: 'targets', dtype: 'i32' } ], out: [ { name: 'loss' } ] },
+    io: { in: [ { name: 'logits' }, { name: 'targets', dtype: 'i32' }, { name: 'weight', dtype: 'f32', optional: true } ], out: [ { name: 'loss' } ] },
     caps: [ 'forward', 'vjp' ], phase: [ 'train' ], pure: true,
     cost: { flops: 'O(M*V)', mem: 'O(M*V)' },
     writesReads: { reads: [ 'act' ], writes: [ 'act' ] },
     impl: { kind: 'kernel', entry: 'kernels/misc/ce_softmax_bwd.wgsl' },
-  }, () => ( { loss: tensor( [], 'f32' ) } ), '交叉熵损失（前向出标量，反向出 dlogits；与 ce_softmax_bwd 共用实现）' ) );
+  }, () => ( { loss: tensor( [], 'f32' ) } ), '交叉熵损失（前向出标量，反向出 dlogits；weight 为逐行系数 [M]：sum→loss=Σw·ce、dlogits=w·(softmax−onehot)，mean→loss=Σw·ce/Σw、dlogits=…/Σw；与 GPU ce_softmax_bwd 同语义，归一化由调用方负责）' ) );
 
   add( builtin( {
     op: 'ZLoss', version: '1.0',

@@ -27,7 +27,7 @@ import {
   createTensorTable,
   tv,
 } from '../../ir/index';
-import { attachCrossEntropy, setTargets } from '../../ir/train';
+import { attachCrossEntropy, attachCrossEntropyWeighted, setTargets, setLossWeights } from '../../ir/train';
 import { builtinCpuGrads } from '../../ir/cpu-grads';
 import { backward, createAdamW, dParamOf } from '../../ir/grad';
 import { openTemplate, analyze, reweight, annotateEnv, applyFix } from '../../ir/studio';
@@ -928,6 +928,146 @@ export async function runIrSelfCheck (): Promise<IrTestResult[]>
     }
     push( 'GRAD-V6 · Residual 显式 x 得 x+f(x)；缺 x 报清晰错误（禁位置兜底）',
       posOk && negOk, `正例 ${ posDetail }；负例 ${ negDetail }` );
+  }
+
+  // ===================== GRAD-V7（CPU 训练台回归）：CrossEntropy 加权分支 =====================
+  // weight 端口给 SFT 掩码 / DPO 系数提供统一底座，语义与 GPU kernel ce_softmax_bwd 对齐：
+  // sum → loss=Σw·ce、dlogits=w·(softmax−onehot)（w 是调用方归一好的线性系数）。
+  // 四件事必须同时成立：
+  //   ① 前向与逐行硬算的 Σw·ce 一致（sum 语义）
+  //   ② 解析梯度 vs 中心差分（logits 直接上游 lmHead.b，信号最强）
+  //   ③ 全 1/M 权重时 weighted(sum) 与 plain(mean) **逐位一致**（M=2^k ⇒ 缩放精确）
+  //   ④ 全零权重：sum → loss=0/零梯度（与 GPU 一致）；mean → 抛清晰错误
+  {
+    const cfg = { vocabSize: 32, blockSize: 8, nLayer: 1, nHead: 2, nEmbd: 16, bias: true };
+    const w = initWeights( cfg, 101 );
+    const gpt = buildGptIr( cfg, w );
+    const B = 2, T = 4;
+    const M = B * T;
+    const rnd = mulberry32( 14 );
+    const tokens = new Uint32Array( M );
+    const targets = new Uint32Array( M );
+    const weights = new Float32Array( M );
+    for ( let i = 0; i < M; i++ )
+    {
+      tokens[ i ] = Math.floor( rnd() * cfg.vocabSize );
+      targets[ i ] = Math.floor( rnd() * cfg.vocabSize );
+      // 一半行系数 0（模拟 SFT 掩码），一半 1~2（非均匀，防退化）
+      weights[ i ] = i % 2 === 0 ? 0 : 1 + rnd();
+    }
+    bindBatch( gpt, tokens, B, T );
+    setTargets( gpt.tensors, targets, B, T );
+    setLossWeights( gpt.tensors, weights, B, T );
+    const sym = { B, T };
+    const modelPlain = attachCrossEntropy( gpt.model );
+    const model = attachCrossEntropyWeighted( modelPlain, { reduction: 'sum' } );
+    const ir = infer( model, { symbols: sym } );
+    const errs = ir.diags.filter( ( d ) => d.level === 'error' );
+    const artifact = emit( model, ir, plan( model, ir, { backends: [ cpuBackend() ] } ) );
+    const impls = builtinCpuImpls();
+    const grads = builtinCpuGrads();
+    const binding = { tensors: gpt.tensors, symbols: sym };
+    const lossNow = (): number => Number( run( model, ir, artifact, binding, impls ).rootOutput.data[ 0 ] );
+
+    // ① 前向对照（sum：loss = Σw·ce）
+    const irLoss = lossNow();
+    const lossNode = model.nodes[ 'loss' ];
+    const headId = lossNode?.slot?.logits;
+    const headOut = headId ? run( model, ir, artifact, binding, impls ).get( headId ) : undefined;
+    let fwdOk = false;
+    let fwdDetail = '拿不到 head 输出';
+    if ( errs.length === 0 && headOut && headOut.data instanceof Float32Array )
+    {
+      const V = cfg.vocabSize;
+      const xs = headOut.data;
+      let manual = 0;
+      for ( let r = 0; r < M; r++ )
+      {
+        if ( weights[ r ] === 0 ) continue;
+        const base = r * V;
+        let mx = -Infinity;
+        for ( let v = 0; v < V; v++ ) if ( xs[ base + v ] > mx ) mx = xs[ base + v ];
+        let se = 0;
+        for ( let v = 0; v < V; v++ ) se += Math.exp( xs[ base + v ] - mx );
+        manual += weights[ r ] * -( xs[ base + targets[ r ] ] - mx - Math.log( se ) );
+      }
+      const diff = Math.abs( irLoss - manual );
+      fwdOk = diff <= 1e-5 * Math.max( 1, Math.abs( manual ) );
+      fwdDetail = `IR=${ irLoss.toFixed( 6 ) } 手算=${ manual.toFixed( 6 ) } 差=${ diff.toExponential( 2 ) }（有效行 ${ weights.filter( ( x ) => x > 0 ).length }/${ M }）`;
+    }
+    else if ( errs.length > 0 ) fwdDetail = `infer error: ${ errs.map( ( d ) => d.code ).join( ',' ) }`;
+
+    // ② 解析梯度 vs 中心差分
+    const bwd = backward( model, ir, artifact, binding, impls, grads );
+    const ana = dParamOf( bwd.dParams, gpt.tensors, 'lmHead.b' );
+    let gradOk = false;
+    let gradDetail = 'lmHead.b 无解析梯度';
+    if ( ana && ana.length > 0 )
+    {
+      const p = gpt.tensors.get( 'lmHead.b' )?.data as Float32Array;
+      let idx = 0;
+      for ( let i = 1; i < ana.length; i++ ) if ( Math.abs( ana[ i ] ) > Math.abs( ana[ idx ] ) ) idx = i;
+      const eps = 1e-3;
+      const orig = p[ idx ];
+      p[ idx ] = orig + eps; const lp = lossNow();
+      p[ idx ] = orig - eps; const lm = lossNow();
+      p[ idx ] = orig;
+      const numeric = ( lp - lm ) / ( 2 * eps );
+      const scale = Math.max( Math.abs( numeric ), Math.abs( ana[ idx ] ) );
+      const rel = Math.abs( numeric - ana[ idx ] ) / Math.max( 1e-12, scale );
+      gradOk = scale >= 1e-3 && rel < 5e-2;
+      gradDetail = `数值=${ numeric.toExponential( 2 ) } 解析=${ ana[ idx ].toExponential( 2 ) } 相对误差=${ rel.toExponential( 2 ) }`;
+    }
+
+    // ③ 全 1/M 权重 ⇒ weighted(sum) 与 plain(mean) 逐位一致
+    //    M=8=2^3：w·(softmax−onehot) 的 1/8 缩放在 f32 下精确（指数移位），两条路径应零差。
+    setLossWeights( gpt.tensors, new Float32Array( M ).fill( 1 / M ), B, T );
+    const lossW = lossNow();
+    const bwdW = backward( model, ir, artifact, binding, impls, grads );
+    const irP = infer( modelPlain, { symbols: sym } );
+    const artP = emit( modelPlain, irP, plan( modelPlain, irP, { backends: [ cpuBackend() ] } ) );
+    const lossPlain = Number( run( modelPlain, irP, artP, binding, impls ).rootOutput.data[ 0 ] );
+    const bwdPlain = backward( modelPlain, irP, artP, binding, impls, grads );
+    const anaW = dParamOf( bwdW.dParams, gpt.tensors, 'lmHead.b' );
+    const anaP = dParamOf( bwdPlain.dParams, gpt.tensors, 'lmHead.b' );
+    let tieOk = lossW === lossPlain;
+    let tieDetail = `loss weighted(1/M)=${ lossW } plain=${ lossPlain }`;
+    if ( tieOk && anaW && anaP )
+    {
+      let maxDiff = 0;
+      for ( let i = 0; i < anaW.length; i++ ) maxDiff = Math.max( maxDiff, Math.abs( anaW[ i ] - anaP[ i ] ) );
+      tieOk = maxDiff === 0;
+      tieDetail += `；梯度最大差 ${ maxDiff.toExponential( 2 ) }`;
+    }
+
+    // ④ 全零权重：sum → loss=0 且梯度=0（GPU kernel 行为）；mean → 抛错
+    setLossWeights( gpt.tensors, new Float32Array( M ), B, T );
+    const zeroLoss = lossNow();
+    const bwdZero = backward( model, ir, artifact, binding, impls, grads );
+    const anaZero = dParamOf( bwdZero.dParams, gpt.tensors, 'lmHead.b' );
+    let zeroMax = 0;
+    if ( anaZero ) for ( let i = 0; i < anaZero.length; i++ ) zeroMax = Math.max( zeroMax, Math.abs( anaZero[ i ] ) );
+    const zeroSumOk = zeroLoss === 0 && zeroMax === 0;
+
+    const modelMeanW = attachCrossEntropyWeighted( modelPlain, { reduction: 'mean' } );
+    const irMean = infer( modelMeanW, { symbols: sym } );
+    const artMean = emit( modelMeanW, irMean, plan( modelMeanW, irMean, { backends: [ cpuBackend() ] } ) );
+    let zeroMeanRejected = false;
+    let zeroDetail = '';
+    try
+    {
+      run( modelMeanW, irMean, artMean, binding, impls );
+      zeroDetail = 'mean+全零竟然没报错';
+    }
+    catch ( err )
+    {
+      zeroMeanRejected = true;
+      zeroDetail = `mean 已拒绝：${ ( err as Error ).message }`;
+    }
+
+    push( 'GRAD-V7 · CrossEntropy 加权分支（前向对照 + FD + 1/M权重与plain逐位一致 + 全零行为）',
+      fwdOk && gradOk && tieOk && zeroSumOk && zeroMeanRejected,
+      `前向[${ fwdDetail }]；梯度[${ gradDetail }]；tie[${ tieDetail }]；全零[${ zeroDetail }，sum loss=${ zeroLoss } sum梯度max=${ zeroMax }]` );
   }
 
   // ===================== ENG-V1（补验收）：编译一次、N 步训练零重复编译 =====================

@@ -14,6 +14,7 @@ import type { GpuContext } from '../gpu/device';
 import { loadTinyShakespeare } from '../train/data';
 import { initWeights } from '../model/init';
 import { Trainer } from '../train/trainer';
+import { CpuTrainer, type TrainCore } from '../train/cpu-trainer';
 import {
   encodeSft,
   makeSftSamples,
@@ -37,12 +38,21 @@ const UI_CONFIG: GPTConfig = {
 const CKPT_KEY = 'trainbench-tinygpt';
 const PAD_ID = SFT_VOCAB.indexOf( ' ' );
 
+/**
+ * CPU 模式的步数缩放：CpuTrainer 单步比 GPU 慢一个量级以上，
+ * 步数等比缩减，让每个阶段仍在「几十秒~几分钟」的体感范围内跑完。
+ * （GPU 侧保持原步数：pretrain 300 / sft 1500 / dpo 120）
+ */
+const CPU_STEPS = { pretrain: 120, sft: 250, dpo: 40 } as const;
+
 interface CurvePoint { x: number; y: number; }
 
-export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
+export function renderTrainApp ( gpu: GpuContext | null, root: HTMLElement ): void
 {
   // ------------------------------------------------------------ 状态
-  let trainer: Trainer | null = null;
+  // gpu 为 null ⇒ CPU 模式（CpuTrainer 走 Spec IR 全链路，功能一致、速度较慢）
+  const isCpu = gpu === null;
+  let trainer: TrainCore | null = null;
   let stopRequested = false;
   let busy = false;
 
@@ -76,6 +86,17 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
     wrap.append( help );
   }
 
+  // CPU 模式说明：没有 WebGPU 也能完整跑，只是慢（诚实预期管理）
+  if ( isCpu )
+  {
+    const cpuNote = el( 'div', 'tb-cpu-note' );
+    cpuNote.append( el( 'p', 'hint',
+      '当前浏览器没有可用的 WebGPU（GPUAdapter 被驱动或浏览器策略禁用）。' +
+      '训练台已自动切换到 CPU 模式：功能完整（预训练 / SFT / DPO / 对话 / 存档全部可用），' +
+      '但步数已缩减、单步更慢——适合体验流程；要跑全量训练请换支持 WebGPU 的浏览器（Chrome / Edge）或设备。' ) );
+    wrap.append( cpuNote );
+  }
+
   // 顶部：阶段按钮
   const controls = el( 'div', 'tb-controls' );
   const btnPre = el( 'button', 'tb-btn', '1 · 预训练' ) as HTMLButtonElement;
@@ -88,7 +109,10 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
   wrap.append( controls );
 
   // 状态条
-  const status = el( 'div', 'tb-status', '空闲 —— 点击「跑完整管线」开始，或分步执行' );
+  const status = el( 'div', 'tb-status',
+    isCpu
+      ? '空闲（CPU 模式）—— 点击「跑完整管线」开始，或分步执行'
+      : '空闲 —— 点击「跑完整管线」开始，或分步执行' );
   wrap.append( status );
 
   // 曲线
@@ -232,10 +256,13 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
 
   // ------------------------------------------------------------ 管线各阶段
 
-  async function ensureTrainer (): Promise<Trainer>
+  async function ensureTrainer (): Promise<TrainCore>
   {
     if ( trainer ) return trainer;
-    trainer = new Trainer( gpu, UI_CONFIG, initWeights( UI_CONFIG, 4242 ), 8 );
+    const weights = initWeights( UI_CONFIG, 4242 );
+    trainer = gpu === null
+      ? new CpuTrainer( UI_CONFIG, weights )
+      : new Trainer( gpu, UI_CONFIG, weights, 8 );
     refreshButtons();
     return trainer;
   }
@@ -253,7 +280,7 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
 
     const B = 8;
     const T = UI_CONFIG.blockSize;
-    const steps = 300;
+    const steps = isCpu ? CPU_STEPS.pretrain : 300;
     const opts = { lr: 3e-3, b1: 0.9, b2: 0.99, eps: 1e-8, wd: 0.0 };
     const ids = corpus.ids;
     let firstLoss = 0;
@@ -300,9 +327,10 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
     return makeSftSamples( 20260101, 512 );
   }
 
-  async function runSft ( steps = 1500 ): Promise<void>
+  async function runSft ( rawSteps = 1500 ): Promise<void>
   {
     const t = await ensureTrainer();
+    const steps = isCpu ? Math.min( rawSteps, CPU_STEPS.sft ) : rawSteps;
     const samples = sftSamples();
     const opts = { lr: 0.01, b1: 0.9, b2: 0.99, eps: 1e-8, wd: 0.0 };
     let first = 0;
@@ -346,15 +374,28 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
     const K = 4;
     const beta = 0.5;
     const opts = { lr: 1e-3, b1: 0.9, b2: 0.99, eps: 1e-8, wd: 0.0 };
-    const steps = 120;
+    const steps = isCpu ? CPU_STEPS.dpo : 120;
     const V = UI_CONFIG.vocabSize;
     const T0 = performance.now();
 
     // reference：冻结当前权重的推理副本
+    // GPU：TinyGpt（WGSL 推理）；CPU：再起一个 CpuTrainer 当冻结副本（只 forward）
     setStatus( 'DPO：冻结 reference 模型…' );
     const refWeights = await t.exportWeights();
-    const { TinyGpt } = await import( '../model/tiny-gpt' );
-    const ref = new TinyGpt( gpu, UI_CONFIG, refWeights, 8 );
+    let refLogitsOf: ( tokens: Uint32Array, B: number, T: number ) => Promise<Float32Array>;
+    if ( isCpu )
+    {
+      const { CpuTrainer: RefTrainer } = await import( '../train/cpu-trainer' );
+      const ref = new RefTrainer( UI_CONFIG, refWeights );
+      refLogitsOf = ( tokens, B, T ) => ref.readForward( tokens, B, T );
+    }
+    else
+    {
+      const { TinyGpt } = await import( '../model/tiny-gpt' );
+      const ref = new TinyGpt( gpu!, UI_CONFIG, refWeights, 8 );
+      refLogitsOf = async ( tokens, B, T ) =>
+        await ref.readTensor( ref.forward( tokens, B, T ) );
+    }
 
     const sigmoid = ( x: number ) => 1 / ( 1 + Math.exp( -x ) );
     let m0 = 0;
@@ -371,7 +412,7 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
 
       t.forward( batch.tokens, B, batch.T );
       const policyLogits = await t.readLogits();
-      const refLogits = await ref.readTensor( ref.forward( batch.tokens, B, batch.T ) );
+      const refLogits = await refLogitsOf( batch.tokens, B, batch.T );
 
       const rowLogp = ( logits: Float32Array, row: number ): number =>
       {

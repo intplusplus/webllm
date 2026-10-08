@@ -361,21 +361,61 @@ export function builtinCpuImpls (): CpuImplRegistry
     if ( t.length !== M )
       throw new Error( `CrossEntropy：targets 长度 ${ t.length } != logits 行数 ${ M }` );
 
-    // 数值稳定的逐行 log-sum-exp。fp32 训练里 logits 不应出现全 -Inf；
-    // 若退化输入（训练早期/极端 batch）导致 NaN，是有意暴露坏输入而非静默归零。
-    let total = 0;
-    for ( let r = 0; r < M; r++ )
-    {
-      const base = r * V;
-      let m = -Infinity;
-      for ( let v = 0; v < V; v++ ) if ( x[ base + v ] > m ) m = x[ base + v ];
-      let se = 0;
-      for ( let v = 0; v < V; v++ ) se += Math.exp( x[ base + v ] - m );
-      const logZ = m + Math.log( se );
-      total += -( x[ base + t[ r ] ] - logZ );
-    }
+    // 可选行权重（SFT 掩码 / DPO 系数的统一底座）。与 GPU kernel ce_softmax_bwd
+    // 同一立场：w 是**调用方归一好的线性系数**。
+    //   reduction='sum'  → loss = Σw·ce，     dlogits = w·(softmax − onehot)
+    //     （CpuTrainer / GPU 训练台用这条：SFT 传 1/N，DPO 传 ±β 精确系数）
+    //   reduction='mean' → loss = Σw·ce/Σw，  dlogits = w·(softmax − onehot)/Σw
+    //     （通用加权平均；Σw=0 未定义 → 抛错）
+    const wRaw = ctx.ins.weight;
     const sumReduction = propString( ctx.props, 'reduction', env, 'mean' ) === 'sum';
-    const loss = sumReduction ? total : total / Math.max( 1, M );
+
+    let loss: number;
+    if ( wRaw != null )
+    {
+      const wf = toF32( wRaw );
+      if ( wf.length !== M )
+        throw new Error( `CrossEntropy：weight 长度 ${ wf.length } != logits 行数 ${ M }` );
+      let wsum = 0;
+      let sumW = 0;
+      for ( let r = 0; r < M; r++ )
+      {
+        const base = r * V;
+        let m = -Infinity;
+        for ( let v = 0; v < V; v++ ) if ( x[ base + v ] > m ) m = x[ base + v ];
+        let se = 0;
+        for ( let v = 0; v < V; v++ ) se += Math.exp( x[ base + v ] - m );
+        wsum += wf[ r ] * -( x[ base + t[ r ] ] - ( m + Math.log( se ) ) );
+        sumW += wf[ r ];
+      }
+      if ( sumReduction )
+      {
+        // 全零权重 → loss=0（与 GPU kernel 行为一致：masked 行零梯度、loss 贡献 0）
+        loss = wsum;
+      }
+      else
+      {
+        if ( !( sumW > 0 ) )
+          throw new Error( `CrossEntropy：mean 加权要求行权重之和 > 0（当前 ${ sumW }）` );
+        loss = wsum / sumW;
+      }
+    }
+    else
+    {
+      // 数值稳定的逐行 log-sum-exp。fp32 训练里 logits 不应出现全 -Inf；
+      // 若退化输入（训练早期/极端 batch）导致 NaN，是有意暴露坏输入而非静默归零。
+      let total = 0;
+      for ( let r = 0; r < M; r++ )
+      {
+        const base = r * V;
+        let m = -Infinity;
+        for ( let v = 0; v < V; v++ ) if ( x[ base + v ] > m ) m = x[ base + v ];
+        let se = 0;
+        for ( let v = 0; v < V; v++ ) se += Math.exp( x[ base + v ] - m );
+        total += -( x[ base + t[ r ] ] - ( m + Math.log( se ) ) );
+      }
+      loss = sumReduction ? total : total / Math.max( 1, M );
+    }
     return { loss: f32( new Float32Array( [ loss ] ), [] ) };
   } );
 

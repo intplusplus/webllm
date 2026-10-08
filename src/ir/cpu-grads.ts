@@ -339,6 +339,46 @@ export function builtinCpuGrads (): GradRegistry
     // 与 attachCrossEntropy / 正向一致，reduction 默认 'mean'（W5：三处单一事实来源）。
     void dOut;
     const env = exprEnv( ctx );
+
+    // 加权分支（与 GPU kernel ce_softmax_bwd 同语义）：
+    //   sum  → dlogits = w·(softmax − onehot)（w 是调用方归一好的线性系数；全零 → 零梯度）
+    //   mean → dlogits = w·(softmax − onehot)/Σw（与 forward 的 Σw·ce/Σw 自洽）
+    // weight 端口本身不是可训练参数（外部绑定数据），不回流梯度。
+    const wRaw = ctx.ins.weight;
+    if ( wRaw != null )
+    {
+      const wf = toF32( wRaw );
+      if ( wf.length !== M )
+        throw new Error( `CrossEntropy 反向：weight 长度 ${ wf.length } != 行数 ${ M }` );
+      const sumReductionW = propString( ctx.props, 'reduction', env, 'mean' ) === 'sum';
+      let sumW = 0;
+      if ( !sumReductionW )
+        for ( let r = 0; r < M; r++ ) sumW += wf[ r ];
+      if ( !sumReductionW && !( sumW > 0 ) )
+        throw new Error( `CrossEntropy 反向：mean 加权要求行权重之和 > 0（当前 ${ sumW }）` );
+      const xs = toF32( logits );
+      const td = toU32( targets );
+      const dlogitsW = new Float32Array( M * V );
+      for ( let r = 0; r < M; r++ )
+      {
+        const base = r * V;
+        const wr = wf[ r ];
+        if ( wr === 0 )
+        {
+          // masked 行：与 GPU kernel 一致，直接零（softmax 也无需算）
+          continue;
+        }
+        let m = -Infinity;
+        for ( let v = 0; v < V; v++ ) if ( xs[ base + v ] > m ) m = xs[ base + v ];
+        let se = 0;
+        for ( let v = 0; v < V; v++ ) se += Math.exp( xs[ base + v ] - m );
+        const scale = sumReductionW ? wr : wr / sumW;
+        for ( let v = 0; v < V; v++ )
+          dlogitsW[ base + v ] = scale * ( Math.exp( xs[ base + v ] - m ) / se - ( v === td[ r ] ? 1 : 0 ) );
+      }
+      return { dIns: { logits: pack( dlogitsW, logits, 'CrossEntropy.dlogits' ) } };
+    }
+
     const sumReduction = propString( ctx.props, 'reduction', env, 'mean' ) === 'sum';
     const dlogits = ceSoftmaxBwdRef( toF32( logits ), M, V, toU32( targets ) );
     if ( sumReduction ) for ( let i = 0; i < dlogits.length; i++ ) dlogits[ i ] *= M;
