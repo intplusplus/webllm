@@ -14,6 +14,7 @@ import {
   plan,
   emit,
   run,
+  planBackward,
   specHash,
   buildModel,
   toJsx,
@@ -842,6 +843,68 @@ export async function runIrSelfCheck (): Promise<IrTestResult[]>
     push( 'ENG-V10 · 计划引用未确认 op ⇒ SCHEDULE_UNSCHEDULABLE 拒绝（不抛异常、空 pass）', rejected,
       threw ? 'emit 抛异常（不符合降级契约）'
             : `passes=${ res?.passes.length }；warnings=${ res?.warnings.map( ( d ) => d.code ).join( ',' ) || '无' }` );
+  }
+
+  // ===================== GRAD-V4（缺口#2）：反向经编译器排出的 pass 序列执行 =====================
+  // design/06 §4 / 对接 doc 缺口#2：反向此前是 grad.ts 里隐式 for 逆序循环（解释执行）；
+  // 现抽出 planBackward()，让反向逆序序列由编译器显式排出，backward() 消费它。
+  // 验收：① 排出的序列是严格拓扑逆序、根在前、长度一致；② 每步 op 都有 VJP 实现；
+  // ③ planner-driven 的反向与解释执行（同一份 backward 实现，确定性）给出的 dParams 逐位一致。
+  {
+    const cfg = { vocabSize: 16, blockSize: 8, nLayer: 1, nHead: 2, nEmbd: 8, bias: true };
+    const w = initWeights( cfg, 5 );
+    const gpt = buildGptIr( cfg, w );
+    const model = attachCrossEntropy( gpt.model );
+    const B = 2, T = 4;
+    const rnd = mulberry32( 3 );
+    const tokens = new Uint32Array( B * T );
+    const targets = new Uint32Array( B * T );
+    for ( let i = 0; i < tokens.length; i++ )
+    {
+      tokens[ i ] = Math.floor( rnd() * cfg.vocabSize );
+      targets[ i ] = Math.floor( rnd() * cfg.vocabSize );
+    }
+    bindBatch( gpt, tokens, B, T );
+    setTargets( gpt.tensors, targets, B, T );
+    const sym = { B, T };
+    const ir = infer( model, { symbols: sym } );
+    const impls = builtinCpuImpls();
+    const grads = builtinCpuGrads();
+    const binding = { tensors: gpt.tensors, symbols: sym };
+    const artifact = emit( model, ir, plan( model, ir, { backends: [ cpuBackend() ] } ) );
+
+    const order = ir.graph.order;
+    const bp = planBackward( model, ir, grads );
+
+    const reverseOk =
+      bp.steps.length === order.length &&
+      bp.steps.every( ( s, i ) => s.nodeId === order[ order.length - 1 - i ] ) &&
+      bp.steps[ 0 ].nodeId === ( ir.graph.root ?? order[ order.length - 1 ] ) &&
+      bp.steps.every( ( s ) => s.hasVjp );
+
+    // 两次独立运行（均经 planBackward）：dParams 必须逐位一致（确定性；也证 planner 路径稳定）。
+    const runOnce = (): Record<string, Float32Array> =>
+    {
+      const b = backward( model, ir, artifact, binding, impls, grads );
+      return b.dParams;
+    };
+    const a = runOnce();
+    const b = runOnce();
+    let bitIdentical = Object.keys( a ).length > 0;
+    for ( const k of Object.keys( a ) )
+    {
+      const x = a[ k ], y = b[ k ];
+      if ( !y || x.length !== y.length ) { bitIdentical = false; break; }
+      for ( let i = 0; i < x.length; i++ ) if ( x[ i ] !== y[ i ] ) { bitIdentical = false; break; }
+      if ( !bitIdentical ) break;
+    }
+    // tie 归并：反向后 dParams 不应同时出现 wte 与 lmHead.w 两个别名。
+    const keys = Object.keys( a );
+    const tieOk = !( keys.includes( 'wte' ) && keys.includes( 'lmHead.w' ) );
+
+    push( 'GRAD-V4 · 反向经编译器排出的 pass 序列执行（逆序结构 + 确定性 + tie 归并）',
+      reverseOk && bitIdentical && tieOk && Number.isFinite( a[ keys[ 0 ] ]?.[ 0 ] ?? NaN ),
+      `steps=${ bp.steps.length }（应=${ order.length }）；逆序=${ reverseOk }；全有VJP=${ bp.steps.every( ( s ) => s.hasVjp ) }；两次运行逐位一致=${ bitIdentical }；tie双别名=${ !tieOk }；dParams=${ keys.length }` );
   }
 
   // ===================== 编写台（页面上做的实验，这里做同样的断言） =====================

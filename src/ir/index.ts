@@ -89,6 +89,7 @@ export {
 } from './grad';
 export { attachCrossEntropy, setTargets, LOSS_NODE_ID, TARGETS_TENSOR } from './train';
 export { builtinCpuGrads } from './cpu-grads';
+export { planBackward, type BackwardStep, type BackwardPlan } from './backward-plan';
 
 import type { Model } from './types';
 import type { OpRegistry } from './op';

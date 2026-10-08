@@ -14,6 +14,7 @@ import { ensureBuiltinOps } from './ops';
 import type { TensorData, TensorTable, TensorValue } from './binding';
 import type { CpuImplRegistry, CpuRunContext } from './exec';
 import { run } from './exec';
+import { planBackward } from './backward-plan';
 
 // ---------------------------------------------------------------------------
 // VJP 契约
@@ -183,9 +184,11 @@ export function backward (
     dParams[ k ] = dParams[ k ] ? inPlaceAdd( dParams[ k ], g ) : asF32( g ).slice();
   };
 
-  for ( let i = order.length - 1; i >= 0; i-- )
+  // 缺口#2：反向逆序序列由编译器显式排出（planBackward），不再隐式 for 循环。
+  const bplan = planBackward( model, ir, grads );
+  for ( const step of bplan.steps )
   {
-    const id = order[ i ];
+    const id = step.nodeId;
     const dOut = acc[ id ];
     if ( !dOut || Object.keys( dOut ).length === 0 ) continue;
     const ctx = ctxs[ id ];
