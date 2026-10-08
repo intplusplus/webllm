@@ -49,7 +49,7 @@ docs/            权威文档（先读 docs/架构总览.md）
 npm run dev / demo / demo:https     # dev server / 一键联邦 demo（信令+dev server）/ 自签 https
 npm run typecheck / build           # 静态检查 / 四页构建
 npm run verify:fed                  # 联邦核心自检（Node 无头，19 项）
-npm run verify:ir                   # Spec IR 自检（Node 无头，48 项：IR-V1~V5/OP-V3·V4/ENG-V2~V4·V12/RUN-V0~V3/GRAD-V0~V3/STUDIO-V1~V5）
+npm run verify:ir                   # Spec IR 自检（Node 无头，50 项：IR-V1~V5/OP-V3·V4/ENG-V1~V4·V10·V12/RUN-V0~V3/GRAD-V0~V3/STUDIO-V1~V5）
 node scripts/verify-ir.mjs --log <file>   # 同上，并把结果按 UTF-8 落盘（Windows 控制台中文会乱码）
 npm run verify:ir-gpu               # GPU 后端验收：真 Chromium + 真显卡跑 IR 前向，GPU↔CPU↔手写参考三方对拍（ENG-V7）
                                     #   ⚠ 前置：npm run dev 必须在跑（WebGPU 只在浏览器里存在）

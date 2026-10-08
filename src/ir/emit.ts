@@ -112,6 +112,22 @@ function emitInner (
       continue;
     }
     const contract = registry.get( node.op )?.contract;
+    if ( !contract )
+    {
+      // ENG-V10：计划引用本引擎未确认/不可调度的 op（例如本地无实现、依赖远端瞬时状态）
+      // 必须在此被拒绝，而不是静默生成一个带错误 kernel 的 dispatch（运行期才炸）。
+      warnings.push( {
+        level: 'warn', code: 'SCHEDULE_UNSCHEDULABLE', node: id,
+        message: `节点 ${ id } 的 op ${ node.op } 在本引擎无已确认实现，计划不可调度`,
+        messageEn: `op ${ node.op } of node ${ id } has no confirmed impl in this engine; plan unschedulable`,
+      } );
+      p.passes = [];
+      return {
+        plan: p, passes: [],
+        arena: p.memory?.arena ?? { segments: [], totalBytes: 0, bindGroups: 0 },
+        passBreaks: 0, warnings,
+      };
+    }
     const reads = contract?.writesReads?.reads ?? [];
     const writes = contract?.writesReads?.writes ?? [];
 

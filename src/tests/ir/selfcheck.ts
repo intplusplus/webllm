@@ -766,6 +766,84 @@ export async function runIrSelfCheck (): Promise<IrTestResult[]>
       `${ first.toFixed( 4 ) } → ${ last.toFixed( 4 ) }（Δ=${ ( first - last ).toFixed( 4 ) }，${ ( ms / N ).toFixed( 1 ) } ms/步）` );
   }
 
+  // ===================== ENG-V1（补验收）：编译一次、N 步训练零重复编译 =====================
+  // design/06 §9.1 原记"部分"：RUN-V2 只验证复用两次逐位一致，无显式编译计数断言。
+  // 这里把"N 步训练只编译一次"做成硬计数：整个循环里 emit 只能被调用一次。
+  {
+    const cfg = { vocabSize: 16, blockSize: 8, nLayer: 1, nHead: 2, nEmbd: 8, bias: true };
+    const w = initWeights( cfg, 5 );
+    const gpt = buildGptIr( cfg, w );
+    const model = attachCrossEntropy( gpt.model );
+    const B = 2, T = 4;
+    const rnd = mulberry32( 3 );
+    const tokens = new Uint32Array( B * T );
+    const targets = new Uint32Array( B * T );
+    for ( let i = 0; i < tokens.length; i++ )
+    {
+      tokens[ i ] = Math.floor( rnd() * cfg.vocabSize );
+      targets[ i ] = Math.floor( rnd() * cfg.vocabSize );
+    }
+    bindBatch( gpt, tokens, B, T );
+    setTargets( gpt.tensors, targets, B, T );
+    const sym = { B, T };
+    const ir = infer( model, { symbols: sym } );
+    const impls = builtinCpuImpls();
+    const grads = builtinCpuGrads();
+    const binding = { tensors: gpt.tensors, symbols: sym };
+
+    // 计数包装：编译（emit）只应发生一次；循环里只能复用同一 artifact。
+    let compileCount = 0;
+    const compileOnce: typeof emit = ( m, i2, p ) =>
+    {
+      compileCount += 1;
+      return emit( m, i2, p );
+    };
+    const artifact = compileOnce( model, ir, plan( model, ir, { backends: [ cpuBackend() ] } ) );
+    const opt = createAdamW( { lr: 0.05, clip: 1 } );
+    const loss0 = Number( run( model, ir, artifact, binding, impls ).rootOutput.data[ 0 ] );
+    let last = loss0;
+    const N = 30;
+    for ( let s = 0; s < N; s++ )
+    {
+      const r = backward( model, ir, artifact, binding, impls, grads );
+      opt.step( r.dParams, gpt.tensors );
+      last = r.loss;
+    }
+    push( 'ENG-V1 · 编译一次、N 步训练零重复编译（compileCount 断言）',
+      compileCount === 1 && last < loss0,
+      `compileCount=${ compileCount }（应=1）；loss ${ loss0.toFixed( 4 ) } → ${ last.toFixed( 4 ) }；${ N } 步复用同一 artifact，未重新 emit/plan/infer` );
+  }
+
+  // ===================== ENG-V10（补验收）：依赖未确认 op 的计划被 SCHEDULE_UNSCHEDULABLE 拒绝 =====================
+  // design/06 §9.1 原记"部分"：emit 已有 SCHEDULE_UNSCHEDULABLE 降级路径，但无验收用例。
+  // 这里构造"计划引用本引擎没有实现的 op"（依赖远端/未确认状态），断言 emit 不抛异常、
+  // 返回空 pass 序列、并带 SCHEDULE_UNSCHEDULABLE 告警——而不是静默生成一个坏 dispatch。
+  {
+    const cfg = DEFAULT_CONFIG;
+    const gpt = buildGptIr( cfg, initWeights( cfg, 1 ) );
+    const model = attachCrossEntropy( gpt.model );
+    const ir = infer( model, { symbols: { B: 1, T: 1 } } );
+    const p = plan( model, ir, { backends: [ cpuBackend() ] } );
+
+    // 把一个正常节点的 op 换成引擎里不存在的实现（模拟"计划依赖远端/未确认状态"）。
+    const ghost: Model = { ...model, nodes: { ...model.nodes } };
+    const victim = Object.keys( ghost.nodes )[ 0 ];
+    ghost.nodes[ victim ] = { ...ghost.nodes[ victim ], op: 'GhostOp@9.9' };
+
+    let threw = false;
+    let res: ReturnType<typeof emit> | null = null;
+    try { res = emit( ghost, ir, p ); }
+    catch { threw = true; }
+
+    const rejected =
+      !threw && res !== null &&
+      res.passes.length === 0 &&
+      res.warnings.some( ( d ) => d.code === 'SCHEDULE_UNSCHEDULABLE' );
+    push( 'ENG-V10 · 计划引用未确认 op ⇒ SCHEDULE_UNSCHEDULABLE 拒绝（不抛异常、空 pass）', rejected,
+      threw ? 'emit 抛异常（不符合降级契约）'
+            : `passes=${ res?.passes.length }；warnings=${ res?.warnings.map( ( d ) => d.code ).join( ',' ) || '无' }` );
+  }
+
   // ===================== 编写台（页面上做的实验，这里做同样的断言） =====================
 
   {
