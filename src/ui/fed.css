@@ -488,3 +488,45 @@ pre.fed-log
     min-width: 100%;
   }
 }
+
+/* ---------- 新手引导（三步上手 + FAQ） ---------- */
+.fed-help
+{
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #101825;
+  border: 1px solid #1e2635;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.fed-help summary
+{
+  cursor: pointer;
+  color: #9fc1e8;
+  font-weight: 600;
+  user-select: none;
+}
+
+.fed-help ol
+{
+  margin: 8px 0 4px;
+  padding-left: 20px;
+}
+
+.fed-help details
+{
+  margin-top: 6px;
+}
+
+.fed-help details summary
+{
+  color: #c6d4e4;
+  font-weight: 400;
+}
+
+.fed-help details p
+{
+  margin: 4px 0 8px;
+}

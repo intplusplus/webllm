@@ -331,3 +331,28 @@ ul.tests li .detail {
 .tb-resume {
   margin-bottom: 16px;
 }
+/* ---------- 新手引导（训练台顶部说明） ---------- */
+.tb-help
+{
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--panel, #11161f);
+  border: 1px solid var(--line, #232b38);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.tb-help summary
+{
+  cursor: pointer;
+  color: var(--fg, #e6edf3);
+  font-weight: 600;
+  user-select: none;
+}
+
+.tb-help ol
+{
+  margin: 8px 0 4px;
+  padding-left: 20px;
+}

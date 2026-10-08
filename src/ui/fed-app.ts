@@ -176,6 +176,41 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   head.append( el( 'p', undefined, view === 'host'
     ? '你是房主：任务、模型、参数都由你定义，写进清单下发给所有节点。成员随时可加入退出，不影响训练。'
     : '加入一个房间参与联邦训练。你的数据不出本地，只交换权重。' ) );
+
+  // 第一次用？三步上手 + 常见问题（可折叠，不占地方）——产品补课：新用户第一眼
+  // 不该面对一堆表单黑话（信令/引擎/清单），先告诉他「点哪、会发生什么」。
+  {
+    const help = el( 'details', 'fed-help' ) as HTMLDetailsElement;
+    const steps = view === 'host'
+      ? [
+        '第 1 步：下面选好「联机方式」，点「创建训练房间」——房间号会自动生成。',
+        '第 2 步：把本页地址发给要一起训的设备（手机直接用浏览器打开即可），对方在「加入页」选你的房间。',
+        '第 3 步：在第 5 节「房间设计」里选模型规模、轮数，然后点「▶ 开始训练」。等待区和曲线会实时更新。',
+      ]
+      : [
+        '第 1 步：选「联机方式」。跨设备就保持默认；同一台电脑测试可选「本机多标签页」。',
+        '第 2 步：点「刷新开放房间」，在列表里点房主开的房间；或直接粘贴房主给你的房间号。',
+        '第 3 步：点「加入房间」，然后等房主开训 —— 你会在日志里看到每轮任务与自己的训练进度。',
+      ];
+    const ol = el( 'ol' );
+    for ( const s of steps ) ol.append( el( 'li', undefined, s ) );
+    help.append( el( 'summary', undefined, '第一次用？三步上手（点开展开）' ) );
+    help.append( ol );
+    const faqs: Array<[ string, string ]> = [
+      [ '「信令地址」是什么？', '只帮设备互相找到对方的中转站，训练数据不经过它。本页已自动填好默认值，一般不用改。' ],
+      [ '为什么引擎显示 CPU？', '只要有一台设备拿不到 WebGPU（旧驱动/虚拟机/手机 http），全网就会协商回退 CPU —— 能训，只是慢一些。' ],
+      [ '训练结束后还能再训吗？', '可以。跑完后按钮会变成「▶ 再次训练」，点它就重开一场（上一场的账本会清空重记）。' ],
+      [ '我的数据会上传吗？', '不会。联邦训练只交换模型权重；原始文本始终留在各自设备本地。' ],
+    ];
+    for ( const [ q, a ] of faqs )
+    {
+      const d = el( 'details' ) as HTMLDetailsElement;
+      d.append( el( 'summary', undefined, q ) );
+      d.append( el( 'p', 'hint', a ) );
+      help.append( d );
+    }
+    head.append( help );
+  }
   root.append( head );
 
   // 1 · 连接
@@ -227,6 +262,7 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   inSignal.value = defaultSignalUrl();
   rowSig.append( inSignal );
   cardConnect.append( rowSig );
+  rowSig.append( el( 'p', 'hint', '一般不用改：页面已按当前环境自动填好。它只负责帮设备互相找到对方，训练数据不经过这里。' ) );
 
   const rowName = el( 'div', 'fed-row' );
   rowName.append( el( 'label', undefined, '我的名字' ) );
@@ -242,7 +278,8 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   const devInfo = el( 'p', 'hint' );
   {
     const d = detectDevice( null );
-    devInfo.textContent = `本机：${ d.kind } · ${ d.cores } 核 · 内存约 ${ d.memoryGB || '?' } GB · WebGPU ${ d.webgpu ? 'API 可用' : 'API 不可用' }`;
+    devInfo.textContent = `本机：${ d.kind } · ${ d.cores } 核 · 内存约 ${ d.memoryGB || '?' } GB · WebGPU ${ d.webgpu ? 'API 可用' : 'API 不可用' }`
+      + ( d.webgpu ? '' : '。不影响训练：开训时全网自动协商，会用 CPU 引擎（慢一些）。' );
   }
   cardConnect.append( devInfo );
 
@@ -951,6 +988,7 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
       {
         btnStart.textContent = '▶ 再次训练';
         btnStart.disabled = false;
+        setStatus( `训练完成 · 想继续就点「▶ 再次训练」（重开一场会清空账本重记）；成果卡与下载在下方` );
       }
     },
   };

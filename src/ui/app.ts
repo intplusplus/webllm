@@ -61,6 +61,21 @@ export function renderTrainApp ( gpu: GpuContext, root: HTMLElement ): void
 
   const wrap = el( 'div', 'tb' );
 
+  // 产品补课：新用户第一眼该知道「这是什么、三个按钮分别是什么」。
+  {
+    const help = el( 'details', 'tb-help' ) as HTMLDetailsElement;
+    help.append( el( 'summary', undefined, '这是什么？三个阶段分别是什么意思？（点开展开）' ) );
+    help.append( el( 'p', 'hint', '这是浏览器里自研 LLM 引擎的完整训练台：不联网、不上传，模型和训练全程跑在你这台设备的浏览器里。点「▶ 跑完整管线」从零训一个字符级小模型，也可以分步执行。' ) );
+    const ol = el( 'ol' );
+    for ( const s of [
+      '预训练：海量文本上学会「下一个字是什么」——模型从此会写通顺的字句。',
+      'SFT 微调：用问答示例教它「按指令回答」，从补全机器变成助手。',
+      'DPO 对齐：用偏好对比教它「哪种回答更好」，收掉胡说八道的脾气。',
+    ] ) ol.append( el( 'li', undefined, s ) );
+    help.append( ol );
+    wrap.append( help );
+  }
+
   // 顶部：阶段按钮
   const controls = el( 'div', 'tb-controls' );
   const btnPre = el( 'button', 'tb-btn', '1 · 预训练' ) as HTMLButtonElement;
