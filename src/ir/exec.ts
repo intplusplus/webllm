@@ -148,6 +148,17 @@ function outPortNames ( contract: OpContract | undefined ): string[]
 }
 
 /**
+ * 第 k 个输入端口是否允许"位置兜底"（缺 slot/edge/param 时由 children[k] 兜底）。
+ * 默认 true；契约端口显式声明 `positional: false` 时禁用（W3：Residual.x 必须显式）。
+ */
+function inPortPositional ( contract: OpContract | undefined, k: number ): boolean
+{
+  const s = contract?.io?.in?.[ k ];
+  if ( s && typeof s === 'object' ) return s.positional !== false;
+  return true; // 字符串端口或缺端口：总是允许兜底
+}
+
+/**
  * 执行一个已编译的 artifact。
  *
  * @param model  权威 IR
@@ -216,7 +227,7 @@ export function run (
           v = values[ edge.from ]?.[ edge.fromPort ] ?? firstOutput( values[ edge.from ] );
           src = { nodeId: edge.from, outPort: edge.fromPort };
         }
-        else if ( k < children.length )
+        else if ( k < children.length && inPortPositional( contract, k ) )
         {
           const cid = children[ k ];
           v = firstOutput( values[ cid ] );

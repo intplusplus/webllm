@@ -361,7 +361,8 @@ export function builtinCpuImpls (): CpuImplRegistry
     if ( t.length !== M )
       throw new Error( `CrossEntropy：targets 长度 ${ t.length } != logits 行数 ${ M }` );
 
-    // 数值稳定的逐行 log-sum-exp；NaN/-Inf 一律视作 0（fp32 训练里不该出现，出现要暴露）。
+    // 数值稳定的逐行 log-sum-exp。fp32 训练里 logits 不应出现全 -Inf；
+    // 若退化输入（训练早期/极端 batch）导致 NaN，是有意暴露坏输入而非静默归零。
     let total = 0;
     for ( let r = 0; r < M; r++ )
     {

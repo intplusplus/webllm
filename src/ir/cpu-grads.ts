@@ -332,9 +332,16 @@ export function builtinCpuGrads (): GradRegistry
     if ( V === undefined || V === 0 ) throw new Error( 'CrossEntropy 反向：末维为 0' );
     const M = numel( logits.shape ) / V;
     if ( !Number.isInteger( M ) ) throw new Error( 'CrossEntropy 反向：元素数不能被 V 整除' );
-    // 参考实现已含 1/M；根收到的标量种子（1）忽略——损失对自身的导数恒为 1。
+    // 参考实现 ceSoftmaxBwdRef 内部**固定**除以 M，对应 forward 的 mean 路径
+    // （mean：loss = total/M ⇒ dlogits = (softmax - onehot)/M）。
+    // 当 reduction='sum' 时 forward 不除 M（loss = total ⇒ dlogits = (softmax - onehot)），
+    // 于是反向需整体乘 M 抵消内部的 /M，使解析梯度与所选 reduction 严格一致。
+    // 与 attachCrossEntropy / 正向一致，reduction 默认 'mean'（W5：三处单一事实来源）。
     void dOut;
+    const env = exprEnv( ctx );
+    const sumReduction = propString( ctx.props, 'reduction', env, 'mean' ) === 'sum';
     const dlogits = ceSoftmaxBwdRef( toF32( logits ), M, V, toU32( targets ) );
+    if ( sumReduction ) for ( let i = 0; i < dlogits.length; i++ ) dlogits[ i ] *= M;
     return { dIns: { logits: pack( dlogits, logits, 'CrossEntropy.dlogits' ) } };
   } );
 

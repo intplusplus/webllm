@@ -24,6 +24,8 @@ import {
   builtinCpuImpls,
   buildGptIr,
   bindBatch,
+  createTensorTable,
+  tv,
 } from '../../ir/index';
 import { attachCrossEntropy, setTargets } from '../../ir/train';
 import { builtinCpuGrads } from '../../ir/cpu-grads';
@@ -765,6 +767,167 @@ export async function runIrSelfCheck (): Promise<IrTestResult[]>
     const ms = Date.now() - t0;
     push( `GRAD-V3 · IR 反向训练 ${ N } 步 loss 下降`, last < first,
       `${ first.toFixed( 4 ) } → ${ last.toFixed( 4 ) }（Δ=${ ( first - last ).toFixed( 4 ) }，${ ( ms / N ).toFixed( 1 ) } ms/步）` );
+  }
+
+  // ===================== GRAD-V5（W1 回归）：CrossEntropy 反向匹配 reduction =====================
+  // ceSoftmaxBwdRef 内部固定 /M（对应 mean）；reduction='sum' 时反向必须乘回 M。
+  // 曾经反向不读 reduction → sum 模式梯度整体小 M 倍（默认 mean 掩盖了它）。
+  {
+    const cfg = { vocabSize: 32, blockSize: 8, nLayer: 1, nHead: 2, nEmbd: 16, bias: true };
+    const w = initWeights( cfg, 100 );
+    const gpt = buildGptIr( cfg, w );
+    const B = 2, T = 4;
+    const rnd = mulberry32( 12 );
+    const tokens = new Uint32Array( B * T );
+    const targets = new Uint32Array( B * T );
+    for ( let i = 0; i < tokens.length; i++ )
+    {
+      tokens[ i ] = Math.floor( rnd() * cfg.vocabSize );
+      targets[ i ] = Math.floor( rnd() * cfg.vocabSize );
+    }
+    bindBatch( gpt, tokens, B, T );
+    setTargets( gpt.tensors, targets, B, T );
+    const sym = { B, T };
+    const impls = builtinCpuImpls();
+    const grads = builtinCpuGrads();
+    const M = B * T;
+
+    const compileWith = ( reduction: 'mean' | 'sum' ) =>
+    {
+      const model = attachCrossEntropy( gpt.model );
+      ( model.nodes[ 'loss' ] as { props: Props } ).props.reduction = reduction;
+      const ir = infer( model, { symbols: sym } );
+      const artifact = emit( model, ir, plan( model, ir, { backends: [ cpuBackend() ] } ) );
+      const binding = { tensors: gpt.tensors, symbols: sym };
+      return { model, ir, artifact, binding };
+    };
+    const mean = compileWith( 'mean' );
+    const sum = compileWith( 'sum' );
+    const lossOf = ( s: ReturnType<typeof compileWith> ): number =>
+      Number( run( s.model, s.ir, s.artifact, s.binding, impls ).rootOutput.data[ 0 ] );
+
+    const bwdSum = backward( sum.model, sum.ir, sum.artifact, sum.binding, impls, grads );
+    const bwdMean = backward( mean.model, mean.ir, mean.artifact, mean.binding, impls, grads );
+    const anaSum = dParamOf( bwdSum.dParams, gpt.tensors, 'lmHead.b' );
+    const anaMean = dParamOf( bwdMean.dParams, gpt.tensors, 'lmHead.b' );
+
+    let fdOk = false;
+    let ratioOk = false;
+    let detail = '';
+    if ( anaSum && anaMean && anaSum.length > 0 )
+    {
+      // 取解析梯度最大的分量做中心差分（与 GRAD-V1 同一选点策略）
+      let idx = 0;
+      for ( let i = 1; i < anaSum.length; i++ ) if ( Math.abs( anaSum[ i ] ) > Math.abs( anaSum[ idx ] ) ) idx = i;
+      const tensor = gpt.tensors.get( 'lmHead.b' );
+      const p = tensor?.data as Float32Array;
+      const eps = 1e-3;
+      const orig = p[ idx ];
+      p[ idx ] = orig + eps; const lp = lossOf( sum );
+      p[ idx ] = orig - eps; const lm = lossOf( sum );
+      p[ idx ] = orig;
+      const numeric = ( lp - lm ) / ( 2 * eps );
+      const scale = Math.max( Math.abs( numeric ), Math.abs( anaSum[ idx ] ) );
+      const rel = Math.abs( numeric - anaSum[ idx ] ) / Math.max( 1e-12, scale );
+      fdOk = scale >= 1e-3 && rel < 5e-2;
+
+      // 强一致性：sum 解析梯度 = mean 解析梯度 × M（同一 logits，仅种子缩放不同）
+      let worst = 0;
+      for ( let i = 0; i < anaSum.length; i++ )
+      {
+        const expect = anaMean[ i ] * M;
+        const rel2 = Math.abs( anaSum[ i ] - expect ) / Math.max( 1e-12, Math.abs( expect ) );
+        if ( rel2 > worst ) worst = rel2;
+      }
+      ratioOk = worst < 1e-3;
+      detail = `FD 相对误差 ${ rel.toExponential( 2 ) }；sum/mean 梯度比最差偏差 ${ worst.toExponential( 2 ) }（期望 =${ M }）`;
+    }
+    else detail = 'lmHead.b 无解析梯度';
+    push( 'GRAD-V5 · CrossEntropy 反向匹配 reduction（sum 对有限差分 + 与 mean 严格差 M 倍）',
+      fdOk && ratioOk, detail );
+  }
+
+  // ===================== GRAD-V6（W3 回归）：Residual 的 x 必须显式 =====================
+  // 曾经：缺 x 时位置兜底把首个 child 当 x，输出静默变成 2*f(x)。
+  // 现在：positional:false 禁用兜底 → 缺 x 必须报清晰错误；显式 x 数值正确。
+  {
+    const K = 4;
+    const rnd = mulberry32( 13 );
+    const f32v = ( n: number, scale: number ): Float32Array =>
+    {
+      const a = new Float32Array( n );
+      for ( let i = 0; i < n; i++ ) a[ i ] = ( rnd() * 2 - 1 ) * scale;
+      return a;
+    };
+    const tbl = createTensorTable( {
+      X0: tv( f32v( K, 1 ), [ K ] ),
+      W1: tv( f32v( K * K, 0.5 ), [ K, K ] ),
+      W2: tv( f32v( K * K, 0.5 ), [ K, K ] ),
+    } );
+    const sym = {};
+    const impls = builtinCpuImpls();
+    const mm = ( id: string, weightKey: string ): ModelNode =>
+    {
+      const ref = builtinRegistry.latest( 'Matmul' )!;
+      return {
+        id, op: `${ ref.contract.op }@${ ref.contract.version }`,
+        props: { transposeB: true, hasBias: false, n: K, bind: { a: 'X0', b: weightKey } },
+      };
+    };
+    const resRef = builtinRegistry.latest( 'Residual' )!;
+    const residualNode = ( id: string, x: string | undefined, child: string ): ModelNode =>
+      ( {
+        id, op: `${ resRef.contract.op }@${ resRef.contract.version }`, props: {},
+        ...( x !== undefined ? { slot: { x } } : {} ), children: [ child ],
+      } );
+
+    // 正例：显式 x（slot 指向 n1），child n2 → out = n1 + n2（线性对，逐位可加）
+    const posModel = mkModel( 'r', [ mm( 'n1', 'W1' ), mm( 'n2', 'W2' ), residualNode( 'r', 'n1', 'n2' ) ] );
+    // 负例：不接 x —— 必须报清晰错误，而不是把 child 当 x 输出 2*n1
+    const negModel = mkModel( 'r', [ mm( 'n1', 'W1' ), residualNode( 'r', undefined, 'n1' ) ] );
+
+    const refOut = ( rootId: string ): Float32Array =>
+    {
+      const m = mkModel( rootId, [ mm( 'n1', 'W1' ), mm( 'n2', 'W2' ) ] );
+      const ir = infer( m, { symbols: sym } );
+      const artifact = emit( m, ir, plan( m, ir, { backends: [ cpuBackend() ] } ) );
+      return run( m, ir, artifact, { tensors: tbl, symbols: sym }, impls ).rootOutput.data as Float32Array;
+    };
+    const out1 = refOut( 'n1' );
+    const out2 = refOut( 'n2' );
+
+    let posOk = false;
+    let posDetail = '未执行';
+    try
+    {
+      const ir = infer( posModel, { symbols: sym } );
+      const artifact = emit( posModel, ir, plan( posModel, ir, { backends: [ cpuBackend() ] } ) );
+      const out = run( posModel, ir, artifact, { tensors: tbl, symbols: sym }, impls ).rootOutput.data as Float32Array;
+      let maxDiff = 0;
+      // 期望值用 Math.fround 模拟 kernel 的 f32 加法 —— f64 直接相加会差半个 ulp
+      for ( let i = 0; i < out.length; i++ ) maxDiff = Math.max( maxDiff, Math.abs( out[ i ] - Math.fround( out1[ i ] + out2[ i ] ) ) );
+      posOk = maxDiff === 0;
+      posDetail = `maxDiff=${ maxDiff.toExponential( 1 ) }（显式 x 时 out 应逐位等于 n1+n2）`;
+    }
+    catch ( err ) { posDetail = `意外抛错：${ ( err as Error ).message }`; }
+
+    let negOk = false;
+    let negDetail = '未执行';
+    try
+    {
+      const ir = infer( negModel, { symbols: sym } ); // infer 必须零崩溃
+      const artifact = emit( negModel, ir, plan( negModel, ir, { backends: [ cpuBackend() ] } ) );
+      run( negModel, ir, artifact, { tensors: tbl, symbols: sym }, impls );
+      negDetail = '竟然没报错（静默把 child 当 x 了）';
+    }
+    catch ( err )
+    {
+      const msg = ( err as Error ).message;
+      negOk = msg.includes( 'Residual' );
+      negDetail = `已拒绝：${ msg }`;
+    }
+    push( 'GRAD-V6 · Residual 显式 x 得 x+f(x)；缺 x 报清晰错误（禁位置兜底）',
+      posOk && negOk, `正例 ${ posDetail }；负例 ${ negDetail }` );
   }
 
   // ===================== ENG-V1（补验收）：编译一次、N 步训练零重复编译 =====================

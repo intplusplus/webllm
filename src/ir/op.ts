@@ -39,6 +39,14 @@ export interface OpPortSpec {
   dtype?: DType;
   /** 端口是否可选（如 Matmul 的 bias）。 */
   optional?: boolean;
+  /**
+   * 是否允许"位置兜底"：当端口未通过 slot/edge/param 绑定时，是否允许用
+   * 第 k 个子节点兜底（children[k]）。默认 true。
+   * 设为 false 时该端口**只能**来自 slot/edge/param；缺省则保持 null，
+   * 由实现层抛出清晰报错（而非静默复用 child）。Residual.x 用此开关杜绝"缺 x 时
+   * 把首个 child 当 x、输出翻倍"的静默错误（W3）。
+   */
+  positional?: boolean;
   doc?: string;
 }
 

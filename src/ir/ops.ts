@@ -551,10 +551,16 @@ function defs (): OpDefinition[]
     return { out: passthrough( ins ) };
   }, '多分支扇出（Residual 的原型）' ) );
 
-  add( composite( 'Residual', { scale: { type: 'float', default: 1 } }, A_FWD_VJP_JVP, [ ...P_ALL ], ( ins ) =>
+  // Residual 的 x 必须显式给出（slot/edge/param）：禁用"位置兜底"，否则缺 x 时
+  // 会把首个 child 当 x，输出静默翻倍（W3）。GPU 版 Residual 本就用 requireTensor 强制显式 x。
+  const residualDef = composite( 'Residual', { scale: { type: 'float', default: 1 } }, A_FWD_VJP_JVP, [ ...P_ALL ], ( ins ) =>
   {
     return { out: passthrough( ins ) };
-  }, 'Fan(sum) 的特例：x + f(x)' ) );
+  }, 'Fan(sum) 的特例：x + f(x)' );
+  const xPort = residualDef.contract.io.in[ 0 ];
+  residualDef.contract.io.in[ 0 ] =
+    typeof xPort === 'string' ? { name: xPort, positional: false } : { ...xPort, positional: false };
+  add( residualDef );
 
   add( composite( 'Bus', { provide: { type: 'string', required: true }, inject: { type: 'string', default: '' } }, A_FWD, [ ...P_ALL ], ( ins ) =>
   {

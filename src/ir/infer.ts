@@ -151,6 +151,14 @@ function normPorts ( list: Array<OpPortSpec | string> | undefined, prefix: strin
   return out;
 }
 
+/** 第 k 个输入端口是否允许"位置兜底"（与 exec() 的 `inPortPositional` 同语义，W3）。 */
+function inPortPositionalFor ( contract: OpContract | undefined, k: number ): boolean
+{
+  const s = contract?.io?.in?.[ k ];
+  if ( s && typeof s === 'object' ) return s.positional !== false;
+  return true;
+}
+
 function toPhaseArray ( p: Phase | Phase[] | undefined ): Phase[]
 {
   if ( p === undefined ) return [];
@@ -473,8 +481,10 @@ function inferGraph ( model: Model, opts: InferOptions ): InferResult
         checkEdgeTypes( id, port, edge.from, inputs[ port.name ] );
         continue;
       }
-      // c) children 位置对应：第 k 个子对第 k 个输入端口
-      if ( k < children.length )
+      // c) children 位置对应：第 k 个子对第 k 个输入端口。
+      //    但若该端口声明 `positional: false`（如 Residual.x），禁用兜底——缺显式来源时
+      //    保持 null，由实现层清晰报错，而非静默复用 child（W3，须与 exec() 一致）。
+      if ( k < children.length && inPortPositionalFor( contract, k ) )
       {
         const srcId = children[ k ];
         inputs[ port.name ] = resolveSource( port.name, srcId, sourceOut0( srcId ) );
