@@ -88,8 +88,14 @@ function defaultSignalUrl (): string
 {
   const q = qp( 'signal' );
   if ( q ) return q;
+  const host = location.hostname || '127.0.0.1';
+  // 网关部署（如公网发布）：HTTPS 且无显式端口时，信令挂在同源 /signal 路径下。
+  // 默认 :5180 在公网不可达（托管平台只暴露 443），是「创建失败：连接信令服务器
+  // 超时」的常见成因。本地开发（vite :5173 / 局域网 IP）仍走 :5180 默认。
+  if ( location.protocol === 'https:' && !location.port )
+    return `wss://${ host }/signal`;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${ proto }//${ location.hostname || '127.0.0.1' }:5180`;
+  return `${ proto }//${ host }:5180`;
 }
 
 /** 读取 URL 查询参数 —— 用于分享/复现一份房间配置，也让界面可被自动化测试。 */
@@ -1291,7 +1297,9 @@ export function renderFedApp ( root: HTMLElement, view: 'host' | 'join' ): void
   {
     const switchBar = el( 'p', 'hint' );
     const a = document.createElement( 'a' );
-    a.href = view === 'host' ? '/pages/join.html' : '/pages/host.html';
+    // 跨页带上当前查询参数（signal / room 等）——不然公网部署下换页后
+    // 信令地址会退回 :5180 默认，又是连不上。
+    a.href = `/pages/${ view === 'host' ? 'join' : 'host' }.html${ location.search }`;
     a.textContent = view === 'host' ? '→ 切换到加入页（浏览开放房间）' : '→ 切换到房主页（创建并设计房间）';
     switchBar.append( a );
     head.append( switchBar );
