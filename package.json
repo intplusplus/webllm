@@ -17,6 +17,7 @@
     "build:standalone:ir": "node scripts/build-standalone-ir.mjs",
     "verify:fed": "node scripts/verify-fed.mjs",
     "verify:ir": "node scripts/verify-ir.mjs",
+    "verify:ir-gpu": "node scripts/verify-ir-gpu.mjs",
     "verify:e2e": "node scripts/verify-e2e.mjs",
     "verify:signal": "node scripts/verify-signal.mjs",
     "verify:phone": "node scripts/verify-phone.mjs",

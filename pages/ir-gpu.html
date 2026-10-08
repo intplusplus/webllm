@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IR · GPU 后端对拍（测试页）</title>
+    <style>
+      body { margin: 0; background: #0b0e14; color: #c9d1d9; font: 13px/1.6 ui-monospace, Consolas, monospace; }
+      #app { max-width: 760px; margin: 0 auto; padding: 24px 18px; }
+      h1 { font-size: 15px; color: #58a6ff; margin: 0 0 12px; }
+      pre { white-space: pre-wrap; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <h1>IR · GPU 后端对拍</h1>
+      <p id="status">等待被驱动…（本页由 scripts/verify-ir-gpu.mjs 通过 CDP 调用 <code>window.__IR_GPU__.run()</code>）</p>
+      <pre id="out"></pre>
+    </div>
+    <script type="module" src="/src/app/ir-gpu-test.ts"></script>
+  </body>
+</html>
